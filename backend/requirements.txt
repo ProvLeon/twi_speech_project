@@ -1,0 +1,13 @@
+fastapi>=0.95.0
+uvicorn[standard]>=0.21.0
+python-dotenv>=1.0.0
+# pydantic[email]>=1.10.0 # Using Pydantic's settings management
+pydantic>=2.0.0         # Use Pydantic V2 explicitly if desired
+pydantic-settings>=1.0.0 # <-- ADD THIS LINE
+motor>=3.1.0           # Async MongoDB driver
+boto3>=1.26.0          # AWS SDK (for S3 compatible R2)
+python-multipart>=0.0.6 # For handling file uploads
+pymongo[srv]>=4.0       # Required by motor sometimes, good to have explicitly for SRV lookup
+pytz>=2023.3 # Added for timezone handling in models.py
+pandas>=1.5.0       # <-- ADD for Excel export
+openpyxl>=3.0.0     # <-- ADD for Excel export (.xlsx)

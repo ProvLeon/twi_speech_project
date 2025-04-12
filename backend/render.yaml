@@ -1,0 +1,32 @@
+services:
+  - type: web # Specifies a web service
+    name: twi-speech-backend # Name of your service on Render
+    env: python # Environment type
+    region: frankfurt # Choose a region close to you/your users (e.g., Frankfurt, Ohio)
+    plan: free # Or your desired plan (e.g., starter)
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt" # How to install dependencies
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT" # How Render starts your app ($PORT is auto-assigned)
+    envVars: # Environment variables - SET VALUES IN RENDER DASHBOARD (Secrets)
+      - key: PYTHON_VERSION # Optional: Specify Python version if needed
+        value: 3.10 # Match your development version
+      - key: CLOUDFLARE_ACCOUNT_ID
+        fromSecret: true # Tells Render to use a secret value
+      - key: CLOUDFLARE_ACCESS_KEY_ID
+        fromSecret: true
+      - key: CLOUDFLARE_SECRET_ACCESS_KEY
+        fromSecret: true
+      - key: R2_BUCKET_NAME
+        fromSecret: true
+      - key: MONGODB_URI
+        fromSecret: true
+      - key: MONGO_DB_NAME
+        fromSecret: true
+      - key: FRONTEND_ORIGIN # Set allowed origins for production here
+        value: "your_production_frontend_url" # Or keep as "*" initially if needed
+
+# Optional: Add a database if you want Render to host PostgreSQL (not MongoDB)
+# databases:
+#   - name: mydatabase
+#     databaseName: mydatabasename
+#     user: mydatabaseuser
+#     plan: free
