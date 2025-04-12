@@ -281,7 +281,7 @@ async def add_or_update_transcription(
     try:
         updated_recording = await update_transcription(
             collection=collection,
-            recording_id=recording_id,
+            recording_id_str=recording_id,
             transcription_data=transcription_input
         )
 
@@ -414,5 +414,10 @@ async def delete_all_recordings(
 # --- Uvicorn Runner ---
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting Uvicorn server for local development...")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, app_dir="app")
+    import os
+
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 8000))
+
+    logger.info(f"Starting Uvicorn server on {host}:{port}...")
+    uvicorn.run("app.main:app", host=host, port=port, reload=True)
