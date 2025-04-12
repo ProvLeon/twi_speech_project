@@ -43,6 +43,7 @@ export const RecordingListItem: React.FC<RecordingListItemProps> = ({
   const playIconColor = recording.uploaded
     ? useThemeColor({ light: '#9CA3AF', dark: '#6B7280' }, 'icon')
     : useThemeColor({ light: '#4F46E5', dark: '#C7D2FE' }, 'tint');
+  const backgroundColor = useThemeColor({ light: '#F3F4F6', dark: '#374151' }, 'background');
 
   return (
     <View
@@ -129,7 +130,7 @@ export const RecordingListItem: React.FC<RecordingListItemProps> = ({
               <View style={{
                 flexDirection: 'row',
                 alignItems: 'center',
-                backgroundColor: useThemeColor({ light: '#F3F4F6', dark: '#374151' }, 'background'),
+                backgroundColor: backgroundColor,
                 paddingHorizontal: 6,
                 paddingVertical: 2,
                 borderRadius: 4
@@ -173,7 +174,7 @@ export const RecordingListItem: React.FC<RecordingListItemProps> = ({
           )}
         </TouchableOpacity>
       </View>
-    </View>
+    </View >
   );
 };
 

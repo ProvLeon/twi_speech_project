@@ -4,8 +4,8 @@ import * as FileSystem from 'expo-file-system';
 import { isValidCode } from './utils';
 
 // --- Constants ---
-const PARTICIPANT_DETAILS_KEY = 'participantDetails_v2'; // Current participant
-const ALL_PARTICIPANTS_KEY = 'allParticipants_v1'; // New key for storing all participants
+export const PARTICIPANT_DETAILS_KEY = 'participantDetails_v2'; // Current participant
+export const ALL_PARTICIPANTS_KEY = 'allParticipants_v1'; // New key for storing all participants
 const PENDING_RECORDINGS_KEY = 'pendingRecordings_v2';
 const recordingsDir = FileSystem.documentDirectory + 'recordings/';
 

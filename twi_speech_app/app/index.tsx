@@ -15,6 +15,8 @@ import {
   deleteAllDeviceRecordings,
   deleteAllRecordingsForParticipant,
   getAllParticipants,
+  ALL_PARTICIPANTS_KEY,
+  PARTICIPANT_DETAILS_KEY,
 } from '@/lib/storage';
 import { uploadRecording } from '@/lib/api';
 import * as Network from 'expo-network';
@@ -25,9 +27,18 @@ import { ThemedSafeAreaView } from '@/components/ThemedSafeAreaView';
 import { isValidCode } from '@/lib/utils';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { ParticipantSelector } from '@/components/ParticipantSelector';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Redirect } from "expo-router";
+
+
+const WELCOME_SEEN_KEY = 'welcomeScreenSeen_v1';
+
 
 type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'error';
-type ViewMode = 'participant' | 'settings' | 'select-participant' | 'create-participant' | 'edit-participant';
+type ViewMode = 'participant' | 'settings' | 'select-participant' | 'create-participant' | 'edit-participant' | 'participant-recordings';
+
+
+
 
 export default function HomeScreen() {
   // --- Hooks at the top level ---
@@ -43,7 +54,9 @@ export default function HomeScreen() {
   const cardBgColor = useThemeColor({ light: '#F9FAFB', dark: '#1F2937' }, 'card');
   const borderColor = useThemeColor({ light: '#E5E7EB', dark: '#374151' }, 'border');
 
-  // --- State hooks ---
+  // State hooks
+  const [isCheckingWelcome, setIsCheckingWelcome] = useState(true);
+  const [hasSeenWelcome, setHasSeenWelcome] = useState(false);
   const [participantDetails, setParticipantDetails] = useState<ParticipantDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSetupMode, setIsSetupMode] = useState(false);
@@ -58,15 +71,17 @@ export default function HomeScreen() {
   const [settingsTabIndex, setSettingsTabIndex] = useState<number>(0); // 0: All Recordings, 1: Participants
 
   // --- Refs instead of state for audio playback ---
-  const playbackSoundRef = useRef<Audio.Sound | null>(null);
-  const playbackStatusRef = useRef<PlaybackStatus>('idle');
-  const currentlyPlayingUriRef = useRef<string | null>(null);
-  const isPlaybackActiveRef = useRef<boolean>(false);
+  const playbackState = useRef({
+    sound: null as Audio.Sound | null,
+    status: 'idle' as PlaybackStatus,
+    currentUri: null as string | null,
+    isActive: false,
+  }).current;
 
-  // We'll keep a single state for UI updates
+  // UI updates state
   const [playbackUiVersion, setPlaybackUiVersion] = useState(0);
 
-  // --- Callbacks and Effects ---
+  // All your callbacks (don't put any returns before all hooks are defined)
   const triggerHaptic = useCallback((type: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) => {
     Haptics.impactAsync(type).catch(console.error);
   }, []);
@@ -216,33 +231,33 @@ export default function HomeScreen() {
 
   const unloadPlaybackSound = useCallback(async () => {
     console.log("HomeScreen: Unloading playback sound...");
-    if (playbackSoundRef.current) {
+    if (playbackState.sound) {
       try {
-        await playbackSoundRef.current.unloadAsync();
+        await playbackState.sound.unloadAsync();
       } catch (e) {
         console.error("Unload error:", e);
       }
 
-      // Update refs
-      playbackSoundRef.current = null;
-      playbackStatusRef.current = 'idle';
-      currentlyPlayingUriRef.current = null;
-      isPlaybackActiveRef.current = false;
+      // Update state object properties
+      playbackState.sound = null;
+      playbackState.status = 'idle';
+      playbackState.currentUri = null;
+      playbackState.isActive = false;
 
-      // Request UI update
+      // Update UI
       updatePlaybackUI();
     }
-  }, [updatePlaybackUI]);
+  }, [playbackState, updatePlaybackUI]);
 
   const handlePlayRecording = useCallback(async (uri: string) => {
     triggerHaptic();
 
     console.log(`HomeScreen: handlePlayRecording with uri: ${uri}`);
-    console.log(`HomeScreen: Current playback status: ${playbackStatusRef.current}`);
-    console.log(`HomeScreen: Currently playing: ${currentlyPlayingUriRef.current}`);
+    console.log(`HomeScreen: Current playback status: ${playbackState.status}`);
+    console.log(`HomeScreen: Currently playing: ${playbackState.currentUri}`);
 
     // If already playing this URI, stop it
-    if (playbackStatusRef.current === 'playing' && currentlyPlayingUriRef.current === uri) {
+    if (playbackState.status === 'playing' && playbackState.currentUri === uri) {
       console.log("HomeScreen: Stopping current playback");
       await unloadPlaybackSound();
       return;
@@ -267,11 +282,12 @@ export default function HomeScreen() {
 
     // Set refs to loading state
     console.log(`HomeScreen: Loading sound: ${uri}`);
-    playbackStatusRef.current = 'loading';
-    currentlyPlayingUriRef.current = uri;
-    isPlaybackActiveRef.current = true;
+    playbackState.status = 'loading';
+    playbackState.currentUri = uri;
+    playbackState.isActive = true;
     updatePlaybackUI();
 
+    // Rest of the function remains the same but using playbackState...
     try {
       // Configure audio mode
       await Audio.setAudioModeAsync({
@@ -300,8 +316,9 @@ export default function HomeScreen() {
       );
 
       // Update refs
-      playbackSoundRef.current = sound;
-      playbackStatusRef.current = 'playing';
+      // At the end:
+      playbackState.sound = sound;
+      playbackState.status = 'playing';
       updatePlaybackUI();
 
     } catch (error: any) {
@@ -309,6 +326,7 @@ export default function HomeScreen() {
       Alert.alert("Playback Error", error.message || "Could not play audio.");
       unloadPlaybackSound();
     }
+
   }, [triggerHaptic, unloadPlaybackSound, verifyFileExists, updatePlaybackUI]);
 
   const handleDeleteRecording = useCallback((id: string, promptId: string) => {
@@ -500,8 +518,8 @@ export default function HomeScreen() {
     }
   }, [loadAllRecordings, loadParticipantCount]);
 
-  const handleManageParticipants = useCallback(() => {
-    setViewMode('select-participant');
+  const handleManageRecordings = useCallback(() => {
+    setViewMode('participant-recordings');
   }, []);
 
   const handleParticipantSelected = useCallback((participant: ParticipantDetails | null) => {
@@ -523,8 +541,30 @@ export default function HomeScreen() {
     triggerHaptic();
   }, [triggerHaptic]);
 
+  // useEffect(() => {
+  //   const checkWelcomeScreen = async () => {
+  //     try {
+  //       const welcomeSeen = await AsyncStorage.getItem(WELCOME_SEEN_KEY);
+  //       setHasSeenWelcome(welcomeSeen === 'true');
+  //     } catch (e) {
+  //       console.error('Error checking welcome screen state:', e);
+  //     } finally {
+  //       setIsCheckingWelcome(false);
+  //     }
+  //   };
+
+  //   checkWelcomeScreen();
+  // }, []);
+
+  // Redirect if welcome hasn't been seen
+  // if (!isCheckingWelcome && !hasSeenWelcome) {
+  //   return <Redirect href="/welcome" />;
+  // }
+
+
   // --- Effects ---
   useEffect(() => {
+
     let title = "Twi Speech Recorder";
     if (!isSetupMode && participantDetails?.code) {
       title = viewMode === 'settings'
@@ -571,6 +611,26 @@ export default function HomeScreen() {
     return () => clearInterval(intervalId);
   }, [checkNetwork]);
 
+  useEffect(() => {
+    const checkWelcomeScreen = async () => {
+      try {
+        const welcomeSeen = await AsyncStorage.getItem(WELCOME_SEEN_KEY);
+        setHasSeenWelcome(welcomeSeen === 'true');
+      } catch (e) {
+        console.error('Error checking welcome screen state:', e);
+      } finally {
+        setIsCheckingWelcome(false);
+      }
+    };
+
+    checkWelcomeScreen();
+  }, []);
+
+  // All your other useEffects should be here
+
+  // Now, AFTER defining ALL hooks, we can conditionally render
+
+
   // --- Memos ---
   const pendingToUploadCount = useMemo(() => {
     if (viewMode !== 'participant' || !participantDetails) return 0;
@@ -591,6 +651,21 @@ export default function HomeScreen() {
     !isDeletingAll &&
     !isUploading
   ), [displayedRecordings, isDeletingAll, isUploading]);
+
+  if (isCheckingWelcome) {
+    return (
+      <ThemedSafeAreaView className="flex-1 justify-center items-center">
+        <ActivityIndicator size="large" color={primaryColor} />
+      </ThemedSafeAreaView>
+    );
+  }
+
+  if (!hasSeenWelcome) {
+    // AsyncStorage.setItem(WELCOME_SEEN_KEY, 'false');
+    // AsyncStorage.setItem(ALL_PARTICIPANTS_KEY, '')
+    // AsyncStorage.setItem(PARTICIPANT_DETAILS_KEY, '')
+    router.replace('/welcome');
+  }
 
   // --- Render Methods ---
   const renderSettingsScreen = () => {
@@ -654,9 +729,9 @@ export default function HomeScreen() {
                 recording={item}
                 onPlay={handlePlayRecording}
                 onDelete={() => handleDeleteRecording(item.id, item.promptId)}
-                isPlaying={currentlyPlayingUriRef.current === item.localUri && playbackStatusRef.current === 'playing'}
+                isPlaying={playbackState.currentUri === item.localUri && playbackState.status === 'playing'}
                 isDeleting={isDeletingId === item.id || isDeletingAll}
-                showParticipantCode={true} // Always show participant code in the settings view
+                showParticipantCode={viewMode === 'settings' ? true : viewMode === 'participant'}
               />
             )}
             ListHeaderComponent={
@@ -740,6 +815,7 @@ export default function HomeScreen() {
             onCancel={() => {
               setIsSetupMode(false)
               setViewMode('participant')
+              { !participantDetails && setHasSeenWelcome(false) }
             }}
           />
         ) : viewMode === 'edit-participant' ? (
@@ -775,24 +851,15 @@ export default function HomeScreen() {
                 recording={item}
                 onPlay={handlePlayRecording}
                 onDelete={() => handleDeleteRecording(item.id, item.promptId)}
-                isPlaying={currentlyPlayingUriRef.current === item.localUri && playbackStatusRef.current === 'playing'}
+                isPlaying={playbackState.currentUri === item.localUri && playbackState.status === 'playing'}
                 isDeleting={isDeletingId === item.id || isDeletingAll}
                 showParticipantCode={viewMode === 'participant' ? true : false}
               />
             )}
             ListHeaderComponent={
               <View className="px-4 pt-4 pb-2">
-                <View className="flex-row items-center justify-between mb-4 px-1">
-                  {viewMode === 'participant' ? (
-                    <Button
-                      title=""
-                      icon="account-multiple-outline" // Changed icon to represent multiple participants
-                      iconSize={26}
-                      onPress={handleManageParticipants}
-                      className="p-1"
-                      iconColor={iconColor || undefined}
-                    />
-                  ) : (
+                <View className="flex-row items-center justify-end mb-4 px-1">
+                  {viewMode !== 'participant' && (
                     <Button
                       title=""
                       icon="arrow-left-circle-outline"
@@ -803,26 +870,18 @@ export default function HomeScreen() {
                     />
                   )}
 
-                  <Text
+
+
+
+                  {/* <Text
                     className="text-xl font-semibold text-neutral-800 dark:text-neutral-100 text-center flex-1 mx-2"
                     numberOfLines={1}
                     style={{ color: textColor }}
                   >
                     {viewMode === 'participant' ? (participantDetails?.code ?? 'Session') : 'Settings / All'}
-                  </Text>
+                  </Text> */}
 
-                  {viewMode === 'participant' ? (
-                    <Button
-                      title=""
-                      icon="cog-outline"
-                      iconSize={26}
-                      onPress={() => setViewMode('settings')}
-                      className="p-1"
-                      iconColor={iconColor || undefined}
-                    />
-                  ) : (
-                    <View style={{ width: 34 }} />
-                  )}
+
                 </View>
 
                 {viewMode === 'participant' && participantDetails && (
@@ -834,8 +893,18 @@ export default function HomeScreen() {
                       >
                         Current Participant:
                       </Text>
-
-
+                      {viewMode === 'participant' ? (
+                        <Button
+                          title=""
+                          icon="cog-outline"
+                          iconSize={26}
+                          onPress={goToSettings}
+                          className="p-1 right-0"
+                          iconColor={iconColor || undefined}
+                        />
+                      ) : (
+                        <View style={{ width: 34 }} />
+                      )}
                     </View>
 
                     <View className="flex-row items-center">
@@ -863,6 +932,7 @@ export default function HomeScreen() {
                           ].filter(Boolean).join(' • ') || 'No additional details provided'}
                         </Text>
                       </View>
+
                       <Text className="text-xs py-1 px-2 rounded-full bg-neutral-100 dark:bg-neutral-700" style={{ color: secondaryTextColor }}>
                         {participantCount} {participantCount === 1 ? 'Participant' : 'Participants'}
                       </Text>
@@ -872,7 +942,7 @@ export default function HomeScreen() {
 
                 {viewMode === 'participant' && (
                   <Button
-                    title="Start / Continue Recording"
+                    title={`${displayedRecordings.length > 0 ? 'Continue Recording' : 'Start Recording'}`}
                     icon="microphone-plus"
                     iconColor='#F5f5f0'
                     onPress={() => router.push('/record')}
