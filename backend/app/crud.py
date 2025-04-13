@@ -20,15 +20,22 @@ logger = logging.getLogger(__name__)
 
 
 def _convert_objectid_to_str(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Helper to convert _id (and potentially speaker_id) in a fetched dict."""
+    """Helper to convert _id and speaker_id in a fetched dict to strings."""
     if not doc:
         return None
-    if '_id' in doc and isinstance(doc['_id'], ObjectId):
-        doc['id'] = str(doc['_id']) # Use 'id' as the model field name
-        # del doc['_id'] # Optionally remove the original _id
-    if 'speaker_id' in doc and isinstance(doc['speaker_id'], ObjectId):
-        doc['speaker_id'] = str(doc['speaker_id'])
-    return doc
+
+    # Create a copy to avoid modifying the original
+    result = doc.copy()
+
+    # Convert _id to string
+    if '_id' in result and isinstance(result['_id'], ObjectId):
+        result['_id'] = str(result['_id'])
+
+    # Convert speaker_id to string
+    if 'speaker_id' in result and isinstance(result['speaker_id'], ObjectId):
+        result['speaker_id'] = str(result['speaker_id'])
+
+    return result
 
 
 async def get_or_create_speaker(

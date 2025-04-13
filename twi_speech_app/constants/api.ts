@@ -13,6 +13,6 @@
 //   : `http://${YOUR_COMPUTER_IP}:8000`;
 
 // For deployed backend:
-export const API_BASE_URL = 'https://twi-speech-backend-data.onrender.com/';
+export const API_BASE_URL = 'https://twi-speech-backend-data.onrender.com';
 
 export const UPLOAD_AUDIO_ENDPOINT = `${API_BASE_URL}/upload/audio`;
