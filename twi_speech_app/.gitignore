@@ -37,3 +37,7 @@ yarn-error.*
 
 app-example
 twi-speech*.json
+
+.DS_Store
+*/.DS_Store
+../.DS_Store
