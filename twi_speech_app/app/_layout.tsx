@@ -4,10 +4,11 @@ import "./global.css";
 import { useFonts } from "expo-font";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { StatusBar } from 'expo-status-bar';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View } from 'react-native';
+// import AsyncStorage from '@react-native-async-storage/async-storage';
+// import { View } from 'react-native';
+// import { ModalProvider } from '@/context/ModalContext';
 
-const WELCOME_SEEN_KEY = 'welcomeScreenSeen_v1';
+// const WELCOME_SEEN_KEY = 'welcomeScreenSeen_v1';
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
@@ -25,33 +26,33 @@ export default function RootLayout() {
   // Return the Stack immediately without any conditional redirects
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <Stack screenOptions={{
-        headerShown: false,
-      }}>
-        <Stack.Screen
-          name="welcome"
-          options={{
-            title: "Welcome",
-            headerShown: false,
-            gestureEnabled: false
-          }}
-        />
-        <Stack.Screen
-          name="index"
-          options={{
-            title: "Twi Recorder Home"
-          }}
-        />
-        <Stack.Screen
-          name="record"
-          options={{
-            title: "Record Prompt",
-            headerBackTitle: "Home"
-          }}
-        />
+        <Stack screenOptions={{
+          headerShown: false,
+        }}>
+          <Stack.Screen
+            name="welcome"
+            options={{
+              title: "Welcome",
+              headerShown: false,
+              gestureEnabled: false
+            }}
+          />
+          <Stack.Screen
+            name="index"
+            options={{
+              title: "Twi Recorder Home"
+            }}
+          />
+          <Stack.Screen
+            name="record"
+            options={{
+              title: "Record Prompt",
+              headerBackTitle: "Home"
+            }}
+          />
 
-      </Stack>
-      <StatusBar style="auto" />
+        </Stack>
+        <StatusBar style="auto" />
     </GestureHandlerRootView>
   );
 }

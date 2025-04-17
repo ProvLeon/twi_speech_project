@@ -109,7 +109,7 @@ export const ParticipantSelector: React.FC<ParticipantSelectorProps> = ({
         className={`
           py-4 px-4 mb-3 rounded-lg flex-row items-center justify-between
           ${isActive ? 'border-2 border-primary dark:border-primary-light' : 'border border-neutral-200 dark:border-neutral-700'}
-        `}
+          `}
         style={{ backgroundColor: cardBgColor }}
         disabled={isActive || isDeleting}
         onPress={() => handleSelectParticipant(item)}

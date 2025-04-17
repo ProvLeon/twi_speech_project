@@ -70,7 +70,7 @@ export default function HomeScreen() {
   const [participantCount, setParticipantCount] = useState<number>(0);
   const [settingsTabIndex, setSettingsTabIndex] = useState<number>(0); // 0: All Recordings, 1: Participants
 
-  // --- Refs instead of state for audio playback ---
+  // --- used Refs instead of state for audio playback ---
   const playbackState = useRef({
     sound: null as Audio.Sound | null,
     status: 'idle' as PlaybackStatus,
@@ -81,7 +81,7 @@ export default function HomeScreen() {
   // UI updates state
   const [playbackUiVersion, setPlaybackUiVersion] = useState(0);
 
-  // All your callbacks (don't put any returns before all hooks are defined)
+  // All the callbacks are defined here
   const triggerHaptic = useCallback((type: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) => {
     Haptics.impactAsync(type).catch(console.error);
   }, []);
@@ -111,7 +111,7 @@ export default function HomeScreen() {
     console.log("HomeScreen: Loading ALL recordings...");
     try {
       const storedRecordings = await getPendingRecordings();
-      // Make sure we have valid recordings before sorting
+      // confirming we have valid recordings before sorting
       if (Array.isArray(storedRecordings)) {
         storedRecordings.sort((a, b) => b.timestamp - a.timestamp);
         setAllRecordings(storedRecordings);
@@ -129,7 +129,7 @@ export default function HomeScreen() {
   const loadParticipantCount = useCallback(async () => {
     try {
       const participants = await getAllParticipants();
-      // Make sure we have a valid array of participants
+      // Ensure we have a valid array of participants
       if (Array.isArray(participants)) {
         setParticipantCount(participants.length);
       } else {

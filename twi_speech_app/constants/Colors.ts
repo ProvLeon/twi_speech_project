@@ -23,6 +23,8 @@ export const Colors = {
     'warning-light': '#FCD34D',
     'warning-dark': '#D97706',
     border: '#E2E8F0',
+    secondaryText: '#6B7280', // Added secondary text color for light theme
+    card: '#FFFFFF', // Added card background for light theme
   },
   dark: {
     text: '#ECEDEE',
@@ -45,5 +47,7 @@ export const Colors = {
     'warning-light': '#FCD34D',
     'warning-dark': '#D97706',
     border: '#374151',
+    secondaryText: '#9CA3AF', // Added secondary text color for dark theme
+    card: '#1F2937', // Added card background for dark theme
   },
 };

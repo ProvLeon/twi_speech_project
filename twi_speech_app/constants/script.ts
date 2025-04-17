@@ -1,6 +1,6 @@
-import { ScriptPrompt } from '@/types';
+import { RecordingSection, ScriptPrompt } from '@/types';
 
-export const RECORDING_SCRIPT: ScriptPrompt[] = [
+const scriptA: ScriptPrompt[] = [
   { id: 'ScriptA_1', type: 'scripted', text: 'Maakye', meaning: 'Good morning' },
   { id: 'ScriptA_2', type: 'scripted', text: 'Maaha', meaning: 'Good afternoon' },
   { id: 'ScriptA_3', type: 'scripted', text: 'Maadwo', meaning: 'Good evening/night' },
@@ -41,7 +41,10 @@ export const RECORDING_SCRIPT: ScriptPrompt[] = [
   { id: 'ScriptA_38', type: 'scripted', text: 'Kasa den.', meaning: 'Speak loudly / firmly.' },
   { id: 'ScriptA_39', type: 'scripted', text: 'Adɛn nti na woreyɛ saa?', meaning: 'Why are you doing that?' },
   { id: 'ScriptA_40', type: 'scripted', text: 'Ɛhe na ɔwɔ?', meaning: 'Where is he/she?' },
-  { id: 'ScriptA_41', type: 'scripted', text: 'Wobɛtumi aboa me anaa?', meaning: 'Can you help me?' },
+  { id: 'ScriptA_41', type: 'scripted', text: 'Wobɛtumi aboa me anaa?', meaning: 'Can you help me?' }
+]
+
+const scriptB: ScriptPrompt[] = [
   { id: 'ScriptB_1', type: 'scripted', text: 'Hwee', meaning: 'Zero / Nothing' },
   { id: 'ScriptB_2', type: 'scripted', text: 'Baako', meaning: 'One' },
   { id: 'ScriptB_3', type: 'scripted', text: 'Mmienu', meaning: 'Two' },
@@ -93,6 +96,10 @@ export const RECORDING_SCRIPT: ScriptPrompt[] = [
   { id: 'ScriptB_49', type: 'scripted', text: 'Yei yɛ sɛn?', meaning: 'How much is this?' },
   { id: 'ScriptB_50', type: 'scripted', text: 'Ɛyɛ Ghana sidi aduonum.', meaning: 'It is fifty Ghana Cedis.' },
   { id: 'ScriptB_51', type: 'scripted', text: 'Mɛtua sidi ɔha ne aduasa enum.', meaning: 'I will pay one hundred and thirty-five cedis.' },
+
+]
+
+const scriptC: ScriptPrompt[] = [
   { id: 'ScriptC_1', type: 'scripted', text: 'Mepaakyɛw, ntoosi no boɔ yɛ sɛn?', meaning: 'Please, how much are the tomatoes?' },
   { id: 'ScriptC_2', type: 'scripted', text: 'Mepaakyɛw, bankye no boɔ yɛ sɛn?', meaning: 'Please, how much is the cassava?' },
   { id: 'ScriptC_3', type: 'scripted', text: 'Te so kakra ma me.', meaning: 'Reduce the price a little for me.' },
@@ -127,10 +134,92 @@ export const RECORDING_SCRIPT: ScriptPrompt[] = [
   { id: 'ScriptC_32', type: 'scripted', text: 'Trotro sika no yɛ sɛn?', meaning: 'How much is the Trotro fare?' },
   { id: 'ScriptC_33', type: 'scripted', text: 'Yɛadu?', meaning: 'Have we arrived?' },
   { id: 'ScriptC_34', type: 'scripted', text: 'Yɛabɛn?', meaning: 'Are we close?' },
-  { id: 'Spontaneous_1', type: 'spontaneous', text: 'Introduce Yourself – Name, age, where you live, what you do. (Mesrɛ wo, ka wo ho asɛm kyerɛ me. Wo din, w’adi mfeɛ sɛn, ɛhe na wote, adwuma bɛn na woyɛ, anaa sukuu bɛn na wokɔ?)' },
-  { id: 'Spontaneous_2', type: 'spontaneous', text: 'Daily Routine – How you start and end your day. (Kyerɛkyerɛ me sɛnea wo da bɔbɔɔso kɔpem sɛ ɛkɔwie. Dɛn na woyɛ anɔpa, awia, ne anadwo?)' },
+]
+const scriptD: ScriptPrompt[] = [
+  { id: 'ScriptD_1', type: 'scripted', text: 'Sɛ nsuo tɔ a, yɛntumi nkɔ afuom.', meaning: 'If it rains, we cannot go to the farm.' },
+  { id: 'ScriptD_2', type: 'scripted', text: 'Mekɔɔ Kumasi nanso m\'anhu Kofi.', meaning: 'I went to Kumasi but I didn\'t see Kofi.' },
+  { id: 'ScriptD_3', type: 'scripted', text: 'Ɛkɔm de me enti merepɛ biribi adi.', meaning: 'I am hungry so I am looking for something to eat.' },
+  { id: 'ScriptD_4', type: 'scripted', text: 'Ɔbaa ha efiri sɛ ɔpɛ sɛ ɔhu wo.', meaning: 'He/She came here because he/she wants to see you.' },
+  { id: 'ScriptD_5', type: 'scripted', text: 'Akwadaa a w\'atenase no yɛ me ba.', meaning: 'The child who sat down is my child.' },
+  { id: 'ScriptD_6', type: 'scripted', text: 'Ɔkaeɛ sɛ ɔbɛba ɔkyena anɔpa.', meaning: 'He/She said that he/she will come tomorrow morning.' },
+  { id: 'ScriptD_7', type: 'scripted', text: 'W’awofoɔ te ase anaa?', meaning: 'Are your parents alive?' },
+  { id: 'ScriptD_8', type: 'scripted', text: 'Wo wɔ anuannom mmarima anaa mmaa sɛn?', meaning: 'How many brothers or sisters do you have?' },
+  { id: 'ScriptD_9', type: 'scripted', text: 'Me nuabarima panin yɛ ɔkyerɛkyerɛni.', meaning: 'My elder brother is a teacher.' },
+  { id: 'ScriptD_10', type: 'scripted', text: 'M\'adamfo pa na ɔboa me berɛ a mehia mmoa.', meaning: 'My best friend is the one who helps me when I need help.' },
+  { id: 'ScriptD_11', type: 'scripted', text: 'M\'ani agye sɛ m\'ahu wo nnɛ.', meaning: 'I am happy to see you today.' },
+  { id: 'ScriptD_12', type: 'scripted', text: 'Adwuma no yɛ den nanso ɛho hia.', meaning: 'The work is difficult but it is important.' },
+  { id: 'ScriptD_13', type: 'scripted', text: 'Mensusu sɛ ɔbɛtumi awie nnɛ.', meaning: 'I don\'t think he/she can finish today.' },
+  { id: 'ScriptD_14', type: 'scripted', text: 'Ɛwɔ sɛ yɛ boa yɛn ho yɛn ho.', meaning: 'We must help each other.' },
+  { id: 'ScriptD_15', type: 'scripted', text: 'Me werɛ aho pa ara.', meaning: 'I am very sad.' },
+  { id: 'ScriptD_16', type: 'scripted', text: 'M\'abrɛ pa ara.', meaning: 'I am very tired.' },
+  { id: 'ScriptD_17', type: 'scripted', text: 'Ɔpanin no pɛ sɛ ɔne wo kasa.', meaning: 'The boss wants to talk to you.' },
+  { id: 'ScriptD_18', type: 'scripted', text: 'Mepɛ sɛ mesua Twi kasa no yie.', meaning: 'I want to learn the Twi language well.' },
+  { id: 'ScriptD_19', type: 'scripted', text: 'Kenkan nwoma yi ma me.', meaning: 'Read this book for me.' },
+  { id: 'ScriptD_20', type: 'scripted', text: 'Yɛn fie no so paa na ɛwɔ abɔnten so.', meaning: 'Our house is very big and it is on the street.' },
+  { id: 'ScriptD_21', type: 'scripted', text: 'Dua tenten bi si sukuu no akyi.', meaning: 'A tall tree stands behind the school.' },
+  { id: 'ScriptD_22', type: 'scripted', text: 'Adɛn nti na wo kyɛeɛ?', meaning: 'Why were you late?' },
+  { id: 'ScriptD_23', type: 'scripted', text: 'Ɛbɛyɛ nnɔn sɛn ansa na woawie?', meaning: 'What time will it reach before you finish? (What time will you finish?)' },
+  { id: 'ScriptD_24', type: 'scripted', text: 'Wo ne hwan na ɛrekɔ?', meaning: 'With whom are you going?' },
+  { id: 'ScriptD_25', type: 'scripted', text: 'Mpɛn ahe na wodidi?', meaning: 'How many times do you eat in a day?' },
+  { id: 'ScriptD_26', type: 'scripted', text: 'Nnora, menantee kɔɔ kurom.', meaning: 'Yesterday, I walked to town.' },
+  { id: 'ScriptD_27', type: 'scripted', text: 'Ɔkyena yɛbɛdi agorɔ wɔ agoprama so.', meaning: 'Tomorrow we will play on the field.' },
+  { id: 'ScriptD_28', type: 'scripted', text: 'Berɛ a na meredidi no, me nua no baeɛ.', meaning: 'While I was eating, my sibling came.' },
+  { id: 'ScriptD_29', type: 'scripted', text: 'Ɔtumi ka Borɔfo ne Twi fɛfɛɛfɛ.', meaning: 'He/She can speak English and Twi beautifully/fluently.' },
+]
+const spontaneousPrompts: ScriptPrompt[] = [
+  { id: 'Spontaneous_1', type: 'spontaneous', text: 'Introduce Yourself – Name, age, where you live, what you do. (Mesrɛ wo, ka wo ho asɛm kyerɛ me. Wo din, w’adi mfeɛ sɛn, ɛhe na wote, adwuma bɛn na wokɔ?)' },
+  { id: 'Spontaneous_2', type: 'spontaneous', text: 'Daily Routine – How you start and end your day. (Kyerɛ me sɛnea wo da no kɔyɛ fiti anɔpa kɔpem anadwo)' },
   { id: 'Spontaneous_3', type: 'spontaneous', text: 'Describe Your Environment – Talk about what you see around you right now. (Kasa fa nnoɔma a ɛwɔ baabi a wote seesei yi ho.)' },
-  { id: 'Spontaneous_4', type: 'spontaneous', text: 'Narrate a Past Event – Describe something interesting that happened to you recently. (Ka asɛm bi a ɛsi nnansa yi ara a ɛyɛ anigye anaasɛ ɛyɛ nwanwa ho asɛm kyerɛ me.)' },
-  { id: 'Spontaneous_5', type: 'spontaneous', text: 'Favorite Food – Talk about your favorite Twi food. Why do you like it? How is it prepared? (Kasa fa Twi aduane a wopɛ pa ara ho. Adɛn nti na wopɛ saa aduane no? Sɛn na yɛnoa?)' },
-  { id: 'Spontaneous_6', type: 'spontaneous', text: 'Hobbies & Interests – What do you like to do in your free time? (Dɛn na wopɛ sɛ woyɛ wɔ wo bere a w\'anya fa no mu?)' }
+  { id: 'Spontaneous_4', type: 'spontaneous', text: 'Ka asɛm bi a ɛsi nnansa yi ara a ɛmaa w\'ani gyeeɛ paa anaasɛ ɛmaa wo werɛ hoeɛ ho asɛm kyerɛ me.Adɛn nti na ɛte saa?. (Tell me about something that happened recently that made you very happy or very sad.Why did it make you feel that way ?)' },
+  { id: 'Spontaneous_5', type: 'spontaneous', text: 'Kyerɛkyerɛ me sɛnea yɛnoa Twi aduane a wopɛ pa ara no fiase kɔpem awieeɛ. Nnoɔma bɛn na wohia?. (Explain to me how your favorite Twi food is prepared from start to finish.What ingredients do you need?)' },
+  { id: 'Spontaneous_6', type: 'spontaneous', text: 'Hobbies & Interests – What do you like to do in your free time? (Dɛn na wopɛ sɛ woyɛ wɔ wo bere a w\'anya fa no mu?)' },
+  { id: 'Spontaneous_7', type: 'spontaneous', text: 'Faako a woteɛ no, kyerɛkyerɛ akwantuo a wofa firi wo fie kɔ w\'adwumam anaa sukuu mu. (Where you live, describe the journey you take from your home to your workplace or school.)' },
+  { id: 'Spontaneous_8', type: 'spontaneous', text: 'Sɛ wohyia ɔhaw bi wɔ w\'asetenam a, hwan na odi kan boa wo, na ɔkwan bɛn so?. (If you face a problem in your life, who helps you first, and in what way ?)' }
+]
+
+// --- Define Sections ---
+export const RECORDING_SECTIONS: RecordingSection[] = [
+  {
+    id: 'ScriptA',
+    title: 'Common Phrases',
+    description: 'Read the following common Twi phrases aloud clearly.',
+    prompts: scriptA,
+  },
+  {
+    id: 'ScriptB',
+    title: 'Numbers, Dates & Time',
+    description: 'Read the following numbers, days, months, and time-related phrases.',
+    prompts: scriptB,
+  },
+  {
+    id: 'ScriptC',
+    title: 'Everyday Situations',
+    description: 'Read phrases related to shopping, food, health, work, and travel.',
+    prompts: scriptC,
+  },
+  {
+    id: 'ScriptD',
+    title: 'More Conversation',
+    description: 'Read these slightly more complex sentences and questions.',
+    prompts: scriptD,
+  },
+  {
+    id: 'Spontaneous',
+    title: 'Spontaneous Speech',
+    description: 'For the next prompts, read the topic, then speak freely and naturally about it in Twi for 30-60 seconds. DO NOT read the instructions aloud.',
+    prompts: spontaneousPrompts,
+  }
 ];
+
+export const getTotalPrompts = () => {
+  return RECORDING_SECTIONS.reduce((total, section) => total + section.prompts.length, 0);
+};
+
+export const getGlobalPromptIndex = (sectionIndex: number, promptInSectionIndex: number): number => {
+  let globalIndex = 0;
+  for (let i = 0; i < sectionIndex; i++) {
+    globalIndex += RECORDING_SECTIONS[i].prompts.length;
+  }
+  globalIndex += promptInSectionIndex;
+  return globalIndex;
+};

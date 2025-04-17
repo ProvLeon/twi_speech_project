@@ -1,92 +1,158 @@
 import * as FileSystem from 'expo-file-system';
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, Alert, ScrollView, ActivityIndicator, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { View, Text, Alert, ScrollView, ActivityIndicator, TouchableOpacity, StyleSheet, Dimensions } from 'react-native'; // Added Dimensions
 import { useFocusEffect, useRouter, useNavigation } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Audio, AVPlaybackStatus, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
+import ConfettiCannon from 'react-native-confetti-cannon';
+
 import { Button } from '@/components/Button';
 import { PromptDisplay } from '@/components/PromptDisplay';
+import { SectionIntro } from '@/components/SectionIntro';
 import { SoundWaveAnimation } from '@/components/SoundWaveAnimation';
 import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { getParticipantDetails, savePendingRecording, getPendingRecordings } from '@/lib/storage';
-import { RECORDING_SCRIPT } from '@/constants/script';
-import { RecordingMetadata, ParticipantDetails } from '@/types';
+import { RECORDING_SECTIONS, getTotalPrompts, getGlobalPromptIndex } from '@/constants/script';
+import { RecordingMetadata, ParticipantDetails, ScriptPrompt } from '@/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ThemedSafeAreaView } from '@/components/ThemedSafeAreaView';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { isValidCode } from '@/lib/utils';
-
-// Helper functions defined outside component
-const getNextPromptIndex = (currentIndex: number): number => {
-  if (currentIndex >= RECORDING_SCRIPT.length - 1) return -1;
-  return currentIndex + 1;
-};
-
-const getPreviousPromptIndex = (currentIndex: number): number => {
-  if (currentIndex <= 0) return 0;
-  return currentIndex - 1;
-};
+import { SectionCompleteDialog } from '@/components/SectionCompleteDialog'; // Ensure this path is correct
+import { useModal } from '@/context/ModalContext';
 
 type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'stopped' | 'error';
+type DisplayMode = 'intro' | 'prompt';
+
+interface PlaybackState {
+  sound: Audio.Sound | null;
+  status: PlaybackStatus;
+  currentUri: string | null;
+  error: string | null;
+}
+
+// --- Constants ---
+const CONFETTI_DURATION = 3500; // ms
+const { width: screenWidth } = Dimensions.get('window'); // Get screen width for confetti
 
 export default function RecordScreen() {
-  // To better diagnose re-renders
   console.log("RecordScreen: Render Start", new Date().toISOString());
 
-  // --- Hook definitions (all at the top level) ---
+  // --- Hooks ---
   const navigation = useNavigation();
   const router = useRouter();
+
+  const { showModal, hideModal } = useModal();
+
   const primaryColor = useThemeColor({}, 'tint');
   const iconColor = useThemeColor({}, 'icon');
   const dangerColor = useThemeColor({}, 'danger');
+  const themedTextColor = useThemeColor({}, 'text');
+  const successColor = useThemeColor({}, 'success'); // For confetti
+  const timeoutRef = useRef<NodeJS.Timeout>();
 
-  // State hooks
+  // --- State ---
   const [participantDetails, setParticipantDetails] = useState<ParticipantDetails | null>(null);
-  const [currentPromptIndex, setCurrentPromptIndex] = useState<number | null>(null);
-  const [isSessionComplete, setIsSessionComplete] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [initializationError, setInitializationError] = useState<string | null>(null);
-  const [playbackStatus, setPlaybackStatus] = useState<PlaybackStatus>('idle');
-  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [currentSectionIndex, setCurrentSectionIndex] = useState<number>(0);
+  const [currentPromptInSectionIndex, setCurrentPromptInSectionIndex] = useState<number>(0);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('intro');
+  const [isSessionComplete, setIsSessionComplete] = useState(false);
   const [currentPromptRecordingUri, setCurrentPromptRecordingUri] = useState<string | null>(null);
   const [currentPromptRecordingDuration, setCurrentPromptRecordingDuration] = useState<number | undefined>(undefined);
+  const [showConfetti, setShowConfetti] = useState(false);
+  const [playbackUiUpdate, setPlaybackUiUpdate] = useState(0);
+  // State for custom modal visibility
+  const [isSectionCompleteModalVisible, setIsSectionCompleteModalVisible] = useState(false);
 
-  // Refs - use refs for values that shouldn't trigger re-renders
-  const playbackSoundRef = useRef<Audio.Sound | null>(null);
+  // --- Refs ---
   const isMounted = useRef(true);
-  const isPlayingRef = useRef(false); // Track playback without causing re-renders
+  const confettiRef = useRef<ConfettiCannon>(null);
+  const playbackStateRef = useRef<PlaybackState>({
+    sound: null,
+    status: 'idle',
+    currentUri: null,
+    error: null,
+  }).current;
 
-  // Custom hooks
+  // --- Custom Hooks ---
   const {
     startRecording, stopRecordingAndSave, recordingStatus,
     error: recorderError
   } = useAudioRecorder();
 
-  // --- Derived state calculations (not hooks) ---
-  const currentPrompt = (currentPromptIndex !== null && currentPromptIndex >= 0 && currentPromptIndex < RECORDING_SCRIPT.length)
-    ? RECORDING_SCRIPT[currentPromptIndex]
-    : null;
+  // --- Derived State ---
+  const currentSection = RECORDING_SECTIONS[currentSectionIndex];
+  const currentPrompt: ScriptPrompt | null =
+    displayMode === 'prompt' && currentSection && currentPromptInSectionIndex < currentSection.prompts.length
+      ? currentSection.prompts[currentPromptInSectionIndex]
+      : null;
 
-  const progressPercent = isSessionComplete ? 100 : Math.round(((currentPromptIndex ?? 0) / RECORDING_SCRIPT.length) * 100);
+  const totalPrompts = useMemo(getTotalPrompts, []);
+  const globalPromptIndex = getGlobalPromptIndex(currentSectionIndex, currentPromptInSectionIndex);
+  const progressPercent = isSessionComplete ? 100 : Math.round(((globalPromptIndex) / totalPrompts) * 100);
 
-  // UI state flags
   const hasRecordedCurrentPrompt = !!currentPromptRecordingUri;
   const isRecording = recordingStatus === 'recording';
-  const isPlaybackActive = playbackStatus === 'playing' || playbackStatus === 'loading';
-  const canRecord = (recordingStatus === 'ready' || recordingStatus === 'stopped') && !isSessionComplete && !isPlaybackActive;
-  const showReplay = hasRecordedCurrentPrompt && !isRecording;
-  const canGoNext = hasRecordedCurrentPrompt && !isRecording && !isPlaybackActive && !isSessionComplete && currentPromptIndex !== null && currentPromptIndex < RECORDING_SCRIPT.length - 1;
-  const canGoPrevious = !isRecording && !isPlaybackActive && currentPromptIndex !== null && currentPromptIndex > 0;
+  const isPlaybackActive = playbackStateRef.status === 'playing' || playbackStateRef.status === 'loading';
 
-  // Status text calculation
+  // --- Conditions updated to check modal visibility ---
+  const canRecord = (recordingStatus === 'ready' || recordingStatus === 'stopped')
+    ? displayMode === 'prompt' && !isSessionComplete && !isPlaybackActive
+    : false;
+  const showReplay =  hasRecordedCurrentPrompt && !isRecording && displayMode === 'prompt';
+  const canGoNext =  displayMode === 'prompt' && hasRecordedCurrentPrompt && !isRecording && !isPlaybackActive && !isSessionComplete;
+  const canGoPrevious =  displayMode === 'prompt' && !isRecording && !isPlaybackActive && (currentSectionIndex > 0 || currentPromptInSectionIndex > 0);
+
+  const getLastRecordedPosition = async (participantCode: string) => {
+    try {
+      const recordings = await getPendingRecordings();
+      if (!recordings.length) return { sectionIndex: 0, promptIndex: 0 };
+
+      // Filter recordings for this participant and sort by timestamp
+      const participantRecordings = recordings
+        .filter(rec => rec.participantCode === participantCode)
+        .sort((a, b) => b.timestamp - a.timestamp);
+
+      if (!participantRecordings.length) return { sectionIndex: 0, promptIndex: 0 };
+
+      // Find the section and prompt index for the last recording
+      const lastRecording = participantRecordings[0];
+      let foundSection = 0;
+      let foundPrompt = 0;
+
+      for (let sectionIndex = 0; sectionIndex < RECORDING_SECTIONS.length; sectionIndex++) {
+        const promptIndex = RECORDING_SECTIONS[sectionIndex].prompts
+          .findIndex(prompt => prompt.id === lastRecording.promptId);
+
+        if (promptIndex !== -1) {
+          foundSection = sectionIndex;
+          foundPrompt = promptIndex + 1; // Move to next prompt
+          if (foundPrompt >= RECORDING_SECTIONS[sectionIndex].prompts.length) {
+            foundSection++;
+            foundPrompt = 0;
+          }
+          break;
+        }
+      }
+
+      return { sectionIndex: foundSection, promptIndex: foundPrompt };
+    } catch (error) {
+      console.error("Error getting last recorded position:", error);
+      return { sectionIndex: 0, promptIndex: 0 };
+    }
+  };
+
+  // --- Status Text Calculation (remains the same) ---
   let statusText = 'Initializing...';
   if (!isLoading) {
     if (isRecording) statusText = 'Recording...';
     else if (recorderError) statusText = `Recorder Error: ${recorderError}`;
-    else if (playbackStatus === 'loading') statusText = 'Loading Playback...';
-    else if (playbackStatus === 'playing') statusText = 'Playing...';
-    else if (playbackStatus === 'paused') statusText = 'Paused';
-    else if (playbackStatus === 'error') statusText = `Playback Error: ${playbackError || 'Unknown'}`;
+    else if (playbackStateRef.status === 'loading') statusText = 'Loading Playback...';
+    else if (playbackStateRef.status === 'playing') statusText = 'Playing...';
+    else if (playbackStateRef.status === 'paused') statusText = 'Paused';
+    else if (playbackStateRef.status === 'error') statusText = `Playback Error: ${playbackStateRef.error || 'Unknown'}`;
     else if (recordingStatus === 'stopped') statusText = 'Saved!';
     else if (recordingStatus === 'ready' && hasRecordedCurrentPrompt) statusText = 'Ready to Re-record';
     else if (recordingStatus === 'ready') statusText = 'Ready to Record';
@@ -95,212 +161,166 @@ export default function RecordScreen() {
     else statusText = 'Ready';
   }
 
-  // Verify file URI and check if file exists
-  const verifyFileExists = useCallback(async (uri: string): Promise<boolean> => {
-    if (!uri) return false;
-    try {
-      const fileInfo = await FileSystem.getInfoAsync(uri);
-      return fileInfo.exists;
-    } catch (error) {
-      console.error("Error verifying file existence:", error);
-      return false;
-    }
-  }, []);
+  // --- Callbacks (remain the same, except promptForNextAction) ---
+  const showConfirmationModal = useCallback(() => {
+    showModal(
+      <ConfirmationModalContent
+        title="Section Complete!"
+        message={`You have completed Section ${currentSectionIndex + 1}: "${RECORDING_SECTIONS[currentSectionIndex]?.title || 'Current Section'}".\n\nContinue to the next section or go back home?`}
+        iconName="check-circle-outline"
+        options={[
+          {
+            text: "Go Back Home",
+            style: "secondary",
+            icon: "arrow-left",
+            onPress: () => {
+              hideModal();
+              router.back();
+            },
+          },
+          {
+            text: "Continue",
+            style: "primary",
+            icon: "arrow-right",
+            iconPosition: "right",
+            onPress: () => {
+              hideModal();
+              const nextSectionIndex = currentSectionIndex + 1;
+              if (nextSectionIndex < RECORDING_SECTIONS.length) {
+                setCurrentSectionIndex(nextSectionIndex);
+                setCurrentPromptInSectionIndex(0);
+                setDisplayMode('intro');
+                setCurrentPromptRecordingUri(null);
+                setCurrentPromptRecordingDuration(undefined);
+              } else {
+                setIsSessionComplete(true);
+              }
+            },
+          },
+        ]}
+      />
+    );
+  }, [currentSectionIndex, hideModal, router, showModal]);
 
-  // --- All callbacks ---
   const triggerHaptic = useCallback((type: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) => {
     Haptics.impactAsync(type).catch(console.error);
   }, []);
 
+  const triggerPlaybackUiUpdate = useCallback(() => {
+    setPlaybackUiUpdate(v => v + 1);
+  }, []);
+
+  const verifyFileExists = useCallback(async (uri: string): Promise<boolean> => {
+    if (!uri) return false;
+    try { const fileInfo = await FileSystem.getInfoAsync(uri); return fileInfo.exists; }
+    catch (error) { console.error("Error verifying file existence:", error); return false; }
+  }, []);
+
   const unloadPlaybackSound = useCallback(async () => {
-    console.log("Attempting to unload playback sound...");
-    if (playbackSoundRef.current) {
+    console.log("Attempting to unload playback sound..");
+    const sound = playbackStateRef.sound;
+    if (sound) {
       try {
-        await playbackSoundRef.current.unloadAsync();
+        await sound.unloadAsync();
         console.log("Playback sound unloaded successfully");
       } catch (e) {
         console.error("Error during sound unloading:", e);
       } finally {
-        playbackSoundRef.current = null;
-        isPlayingRef.current = false;
-        // Only reset status if it wasn't already idle/stopped/error
-        if (!['idle', 'stopped', 'error'].includes(playbackStatus)) {
-          setPlaybackStatus('idle');
-        }
+        playbackStateRef.sound = null;
+        playbackStateRef.status = 'idle';
+        playbackStateRef.currentUri = null;
+        playbackStateRef.error = null;
+        triggerPlaybackUiUpdate();
       }
     } else {
       console.log("No playback sound to unload");
     }
-  }, [playbackStatus]);
-
-  const loadRecordingForPrompt = useCallback(async (promptId: string | undefined, code: string | undefined) => {
-    if (!promptId || !code) {
-      console.log(`[loadRecordingForPrompt] Invalid promptId (${promptId}) or code (${code})`);
-      setCurrentPromptRecordingUri(null);
-      setCurrentPromptRecordingDuration(undefined);
-      return;
-    }
-
-    console.log(`[loadRecordingForPrompt] Loading for prompt ${promptId}, participant ${code}`);
-
-    try {
-      const allRecordings = await getPendingRecordings();
-      console.log(`[loadRecordingForPrompt] Found ${allRecordings.length} total recordings`);
-
-      const existingRecording = allRecordings.find(
-        rec => rec.promptId === promptId && rec.participantCode === code
-      );
-
-      console.log(`[loadRecordingForPrompt] Found recording for this prompt:`,
-        existingRecording ? "yes" : "no");
-
-      if (existingRecording?.localUri) {
-        // Always store the URI, but check if file exists
-        const fileExists = await verifyFileExists(existingRecording.localUri);
-
-        if (fileExists) {
-          console.log(`[loadRecordingForPrompt] File exists: ${existingRecording.localUri}`);
-          setCurrentPromptRecordingUri(existingRecording.localUri);
-          setCurrentPromptRecordingDuration(existingRecording.recordingDuration);
-        } else {
-          console.warn(`[loadRecordingForPrompt] File doesn't exist at path: ${existingRecording.localUri}`);
-
-          // Still set the URI in state so the UI shows the replay button,
-          // but we'll do another check before actual playback
-          setCurrentPromptRecordingUri(existingRecording.localUri);
-          setCurrentPromptRecordingDuration(existingRecording.recordingDuration);
-        }
-      } else {
-        console.log(`[loadRecordingForPrompt] No recording found or URI is empty`);
-        setCurrentPromptRecordingUri(null);
-        setCurrentPromptRecordingDuration(undefined);
-      }
-    } catch (error) {
-      console.error("[loadRecordingForPrompt] Error loading specific recording:", error);
-      setCurrentPromptRecordingUri(null);
-      setCurrentPromptRecordingDuration(undefined);
-    }
-  }, [verifyFileExists]);
+  }, [playbackStateRef, triggerPlaybackUiUpdate]);
 
   const onPlaybackStatusUpdate = useCallback((status: AVPlaybackStatus) => {
+    if (!playbackStateRef.sound) return;
+
     if (!status.isLoaded) {
       if (status.error) {
         console.error(`Playback Error: ${status.error}`);
-        setPlaybackError(`Error: ${status.error}`);
-        setPlaybackStatus('error');
-        isPlayingRef.current = false;
-        playbackSoundRef.current = null;
-      } else if (playbackStatus !== 'idle') {
-        setPlaybackStatus('stopped');
-        isPlayingRef.current = false;
+        playbackStateRef.error = `Error: ${status.error}`;
+        playbackStateRef.status = 'error';
+        playbackStateRef.sound = null;
+      } else {
+        if (playbackStateRef.status !== 'idle' && playbackStateRef.status !== 'stopped') {
+          playbackStateRef.status = 'stopped';
+        }
       }
     } else {
       if (status.didJustFinish) {
         console.log("Playback finished naturally.");
-        setPlaybackStatus('stopped');
-        isPlayingRef.current = false;
-        playbackSoundRef.current?.setPositionAsync(0).catch(console.error);
+        playbackStateRef.status = 'stopped';
+        playbackStateRef.sound?.setPositionAsync(0).catch(console.error);
       } else if (status.isPlaying) {
-        isPlayingRef.current = true;
-        if (playbackStatus !== 'playing') {
-          setPlaybackStatus('playing');
+        if (playbackStateRef.status !== 'playing') {
+          playbackStateRef.status = 'playing';
+          playbackStateRef.error = null;
         }
-      } else if (!status.isPlaying && playbackStatus === 'playing') {
-        isPlayingRef.current = false;
-        setPlaybackStatus('paused');
+      } else {
+        if (playbackStateRef.status === 'playing') {
+          playbackStateRef.status = 'paused';
+        }
       }
     }
-  }, [playbackStatus]);
+    triggerPlaybackUiUpdate();
+  }, [playbackStateRef, triggerPlaybackUiUpdate]);
 
   const handlePlayPause = useCallback(async () => {
     triggerHaptic();
-    setPlaybackError(null);
+    playbackStateRef.error = null;
 
-    // Debug logging
-    console.log("handlePlayPause called:", {
-      URI: currentPromptRecordingUri,
-      playbackStatus,
-      isPlayingRef: isPlayingRef.current,
-      hasSound: !!playbackSoundRef.current
-    });
+    const currentSound = playbackStateRef.sound;
+    const currentStatus = playbackStateRef.status;
+    const targetUri = currentPromptRecordingUri;
 
-    const currentSound = playbackSoundRef.current;
+    console.log("handlePlayPause called:", { URI: targetUri, currentStatus, hasSound: !!currentSound });
 
-    // Case 1: Currently playing - pause it
-    if (playbackStatus === 'playing' && currentSound) {
+    if (currentStatus === 'playing' && currentSound) {
       console.log("Pausing playback");
-      try {
-        await currentSound.pauseAsync();
-        isPlayingRef.current = false;
-        setPlaybackStatus('paused');
-      } catch (error: any) {
-        console.error("Error pausing playback:", error);
-        setPlaybackError(`Failed to pause: ${error.message}`);
-      }
+      try { await currentSound.pauseAsync(); playbackStateRef.status = 'paused'; triggerPlaybackUiUpdate(); }
+      catch (error: any) { console.error("Error pausing playback:", error); playbackStateRef.error = `Failed to pause: ${error.message}`; playbackStateRef.status = 'error'; triggerPlaybackUiUpdate(); }
     }
-    // Case 2: Paused - resume it
-    else if (playbackStatus === 'paused' && currentSound) {
+    else if (currentStatus === 'paused' && currentSound) {
       console.log("Resuming playback");
-      try {
-        await currentSound.playAsync();
-        isPlayingRef.current = true;
-        setPlaybackStatus('playing');
-      } catch (error: any) {
-        console.error("Error resuming playback:", error);
-        setPlaybackError(`Failed to resume: ${error.message}`);
-      }
+      try { await currentSound.playAsync(); playbackStateRef.status = 'playing'; triggerPlaybackUiUpdate(); }
+      catch (error: any) { console.error("Error resuming playback:", error); playbackStateRef.error = `Failed to resume: ${error.message}`; playbackStateRef.status = 'error'; triggerPlaybackUiUpdate(); }
     }
-    // Case 3: Not playing yet but we have a URI - start playback
-    else if (currentPromptRecordingUri && !['playing', 'loading'].includes(playbackStatus)) {
-      console.log("Starting new playback");
-
-      // Cleanup previous sound if any
+    else if (targetUri && ['idle', 'stopped', 'error'].includes(currentStatus)) {
+      console.log("Starting new playback for URI:", targetUri);
       await unloadPlaybackSound();
-      setPlaybackStatus('loading');
+      playbackStateRef.status = 'loading'; playbackStateRef.currentUri = targetUri; triggerPlaybackUiUpdate();
 
       try {
-        // Set audio mode first
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-          interruptionModeIOS: InterruptionModeIOS.DoNotMix,
-          interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-        });
-
-        // Verify file exists again before trying to play
-        const fileExists = await verifyFileExists(currentPromptRecordingUri);
-        if (!fileExists) {
-          throw new Error(`Audio file doesn't exist at: ${currentPromptRecordingUri}`);
-        }
-
-        console.log("Creating sound object with URI:", currentPromptRecordingUri);
-
-        // Create and load the sound
-        const { sound } = await Audio.Sound.createAsync(
-          { uri: currentPromptRecordingUri },
-          { shouldPlay: true, progressUpdateIntervalMillis: 100 },
-          onPlaybackStatusUpdate
-        );
-
-        console.log("Sound created successfully");
-        playbackSoundRef.current = sound;
-        isPlayingRef.current = true;
-        setPlaybackStatus('playing');
-
+        const fileExists = await verifyFileExists(targetUri);
+        if (!fileExists) throw new Error(`Audio file doesn't exist at: ${targetUri}`);
+        const { sound } = await Audio.Sound.createAsync({ uri: targetUri }, { shouldPlay: true, progressUpdateIntervalMillis: 100 }, onPlaybackStatusUpdate);
+        playbackStateRef.sound = sound; playbackStateRef.status = 'playing'; playbackStateRef.error = null; triggerPlaybackUiUpdate();
       } catch (error: any) {
-        console.error("Error creating/starting sound:", error);
-        setPlaybackError(`Playback failed: ${error.message}`);
-        setPlaybackStatus('error');
-        playbackSoundRef.current = null;
-        isPlayingRef.current = false;
+        console.error("Error creating/starting sound:", error); playbackStateRef.error = `Playback failed: ${error.message}`; playbackStateRef.status = 'error'; playbackStateRef.sound = null; playbackStateRef.currentUri = null; triggerPlaybackUiUpdate();
       }
     } else {
-      console.log("Play/Pause ignored - Status:", playbackStatus, "URI:", currentPromptRecordingUri);
+      console.log("Play/Pause ignored - Status:", currentStatus, "URI:", targetUri);
     }
-  }, [currentPromptRecordingUri, playbackStatus, unloadPlaybackSound, onPlaybackStatusUpdate, triggerHaptic, verifyFileExists]);
+  }, [currentPromptRecordingUri, playbackStateRef, unloadPlaybackSound, onPlaybackStatusUpdate, triggerHaptic, verifyFileExists, triggerPlaybackUiUpdate]);
 
+  // --- Recording Callbacks (handleRecordPress, handleStopPress, loadRecordingForPrompt - no changes) ---
   const handleRecordPress = useCallback(() => {
-    if (playbackStatus !== 'idle' && playbackStatus !== 'stopped') {
+    if (!participantDetails?.code) {
+      Alert.alert("Error", "Please set up participant details before recording.");
+      return;
+    }
+
+    if (!currentPrompt) {
+      Alert.alert("Error", "No active prompt to record.");
+      return;
+    }
+
+    if (playbackStateRef.status !== 'idle' && playbackStateRef.status !== 'stopped') {
       unloadPlaybackSound();
     }
 
@@ -309,24 +329,25 @@ export default function RecordScreen() {
     setCurrentPromptRecordingDuration(undefined);
     triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
     startRecording();
-  }, [startRecording, unloadPlaybackSound, playbackStatus, triggerHaptic]);
+  }, [participantDetails, currentPrompt, startRecording, unloadPlaybackSound, playbackStateRef, triggerHaptic]);
 
   const handleStopPress = useCallback(async () => {
-    if (recordingStatus !== 'recording' || !participantDetails || !currentPrompt) {
-      console.warn("Stop ignored: Not recording or missing details/prompt.");
+    if (!participantDetails?.code) {
+      console.error("Stop prevented: Missing participant details");
+      Alert.alert("Error", "Participant details not found. Please set up participant details.");
+      return;
+    }
+
+    if (!currentPrompt) {
+      console.error("Stop prevented: Missing current prompt");
+      Alert.alert("Error", "No active prompt found. Please restart the recording session.");
       return;
     }
 
     triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
-    console.log("Stopping recording...");
+    console.log("Attempting to stop recording...");
 
     try {
-      console.log("Calling stopRecordingAndSave with:", {
-        code: participantDetails.code,
-        promptId: currentPrompt.id,
-        promptText: currentPrompt.text
-      });
-
       const savedMetadata = await stopRecordingAndSave(
         participantDetails.code,
         currentPrompt.id,
@@ -335,50 +356,102 @@ export default function RecordScreen() {
       );
 
       if (savedMetadata) {
-        console.log("[RecordScreen] Recording saved with URI:", savedMetadata.localUri);
-
-        // Verify the saved file exists
+        console.log("Recording stopped and saved successfully:", savedMetadata.localUri);
         const fileExists = await verifyFileExists(savedMetadata.localUri);
-        console.log(`File exists check after saving: ${fileExists}`);
-
         if (!fileExists) {
-          throw new Error("Recording file was not found after saving");
+          throw new Error("Recording file not found after saving");
         }
-
-        // Save metadata to storage
         const savedToStorage = await savePendingRecording(savedMetadata);
+        if (!savedToStorage) throw new Error("Failed to save recording metadata");
 
-        if (savedToStorage) {
-          setCurrentPromptRecordingUri(savedMetadata.localUri);
-          setCurrentPromptRecordingDuration(savedMetadata.recordingDuration);
-          console.log("[RecordScreen] State updated with new recording URI:", savedMetadata.localUri);
-        } else {
-          throw new Error("Failed to save recording metadata locally");
-        }
+        setCurrentPromptRecordingUri(savedMetadata.localUri);
+        setCurrentPromptRecordingDuration(savedMetadata.recordingDuration);
       } else {
-        throw new Error("Could not save the recording file or generate metadata");
+        throw new Error("Could not save the recording");
       }
     } catch (error: any) {
       console.error("Error in handleStopPress:", error);
-      Alert.alert("Recording Error", error.message || "An error occurred while saving the recording.");
-
-      // Reset UI state
+      Alert.alert("Recording Error", error.message || "An error occurred while saving the recording");
       setCurrentPromptRecordingUri(null);
       setCurrentPromptRecordingDuration(undefined);
     }
-  }, [recordingStatus, participantDetails, currentPrompt, stopRecordingAndSave, triggerHaptic, verifyFileExists]);
+  }, [participantDetails, currentPrompt, stopRecordingAndSave, verifyFileExists, triggerHaptic]);
+
+  const loadRecordingForPrompt = useCallback(async (promptId: string | undefined, code: string | undefined) => {
+    if (!promptId || !code) {
+      console.log(`[loadRecordingForPrompt] Invalid promptId (${promptId}) or code (${code})`);
+      setCurrentPromptRecordingUri(null); setCurrentPromptRecordingDuration(undefined); return;
+    }
+    console.log(`[loadRecordingForPrompt] Loading for prompt ${promptId}, participant ${code}`);
+    try {
+      const allRecordings = await getPendingRecordings();
+      console.log(`[loadRecordingForPrompt] Found ${allRecordings.length} total recordings`);
+      const existingRecording = allRecordings.find(rec => rec.promptId === promptId && rec.participantCode === code);
+      console.log(`[loadRecordingForPrompt] Found recording for this prompt:`, existingRecording ? "yes" : "no");
+      if (existingRecording?.localUri) {
+        const fileExists = await verifyFileExists(existingRecording.localUri);
+        if (fileExists) {
+          console.log(`[loadRecordingForPrompt] File exists: ${existingRecording.localUri}`);
+          setCurrentPromptRecordingUri(existingRecording.localUri); setCurrentPromptRecordingDuration(existingRecording.recordingDuration);
+        } else {
+          console.warn(`[loadRecordingForPrompt] File doesn't exist at path: ${existingRecording.localUri}`);
+          setCurrentPromptRecordingUri(existingRecording.localUri); setCurrentPromptRecordingDuration(existingRecording.recordingDuration);
+        }
+      } else {
+        console.log(`[loadRecordingForPrompt] No recording found or URI is empty`);
+        setCurrentPromptRecordingUri(null); setCurrentPromptRecordingDuration(undefined);
+      }
+    } catch (error) {
+      console.error("[loadRecordingForPrompt] Error loading specific recording:", error);
+      setCurrentPromptRecordingUri(null); setCurrentPromptRecordingDuration(undefined);
+    }
+  }, [verifyFileExists]);
 
   const handleRecordStopPress = useCallback(() => {
+    if (!participantDetails?.code) {
+      Alert.alert("Setup Required", "Please set up participant details before recording.");
+      return;
+    }
+
+    if (!currentPrompt) {
+      Alert.alert("Error", "No active prompt to record.");
+      return;
+    }
+
     if (recordingStatus === 'recording') {
+      console.log("handleRecordStopPress: Status is recording, calling handleStopPress");
       handleStopPress();
     } else if (canRecord) {
+      console.log("handleRecordStopPress: Status is not recording, calling handleRecordPress");
       handleRecordPress();
+    } else {
+      console.log("handleRecordStopPress: Neither recording nor canRecord is true.");
     }
-  }, [recordingStatus, canRecord, handleStopPress, handleRecordPress]);
+  }, [recordingStatus, canRecord, handleStopPress, handleRecordPress, participantDetails, currentPrompt]);
+
+  // --- Section/Navigation Callbacks ---
+  const handleStartSection = useCallback(() => {
+    triggerHaptic();
+    setDisplayMode('prompt');
+    const firstPromptId = currentSection?.prompts[0]?.id;
+    if (firstPromptId && participantDetails?.code) {
+      loadRecordingForPrompt(firstPromptId, participantDetails.code);
+    } else {
+      setCurrentPromptRecordingUri(null);
+      setCurrentPromptRecordingDuration(undefined);
+    }
+  }, [currentSection, participantDetails, loadRecordingForPrompt, triggerHaptic]);
+
+  // --- NEW: Function to show the confirmation prompt ---
+  // const promptForNextAction = useCallback(() => {
+  //   console.log("promptForNextAction called - Setting modal visible");
+  //   setIsConfirmationModalVisible(true);
+  //   console.log("isConfirmationModalVisible should be set to true now");
+  // }, []);
 
   const handleNextPrompt = useCallback(() => {
-    if (!hasRecordedCurrentPrompt || isRecording || isPlaybackActive || isSessionComplete || currentPromptIndex === null) {
-      if (!hasRecordedCurrentPrompt && !isSessionComplete) {
+    if (!canGoNext) {
+      if (!hasRecordedCurrentPrompt && !isSessionComplete && displayMode === 'prompt') {
         Alert.alert("Recording Required", "Please record the current prompt before proceeding.");
         triggerHaptic(Haptics.ImpactFeedbackStyle.Heavy);
       }
@@ -386,241 +459,241 @@ export default function RecordScreen() {
     }
 
     triggerHaptic();
-    // Ensure playback stops when changing prompts
-    if (playbackSoundRef.current) {
-      unloadPlaybackSound();
-    }
+    unloadPlaybackSound();
+    const currentSectionPrompts = currentSection?.prompts ?? [];
+    const isLastPromptInSection = currentPromptInSectionIndex >= currentSectionPrompts.length - 1;
 
-    const nextIndex = getNextPromptIndex(currentPromptIndex);
-    if (nextIndex === -1) {
-      setIsSessionComplete(true);
-      Alert.alert("Session Complete!", "All prompts recorded for this participant. Go back to review and upload.");
+    if (isLastPromptInSection) {
+      if (currentSectionIndex >= RECORDING_SECTIONS.length - 1) {
+        setIsSessionComplete(true);
+        Alert.alert("Session Complete!", "All prompts recorded. Go back to review and upload.");
+      } else {
+        triggerHaptic(Haptics.ImpactFeedbackStyle.Heavy);
+        setShowConfetti(true);
+
+        // Show modal after confetti
+        setTimeout(() => {
+          setShowConfetti(false);
+          setIsSectionCompleteModalVisible(true);
+        }, CONFETTI_DURATION);
+      }
     } else {
-      setCurrentPromptIndex(nextIndex);
+      // Regular next prompt logic
+      const nextPromptIndex = currentPromptInSectionIndex + 1;
+      setCurrentPromptInSectionIndex(nextPromptIndex);
+      setCurrentPromptRecordingUri(null);
+      setCurrentPromptRecordingDuration(undefined);
+      if (nextPromptIndex < currentSectionPrompts.length) {
+        const nextPromptId = currentSection?.prompts[nextPromptIndex]?.id;
+        if (nextPromptId && participantDetails?.code) {
+          loadRecordingForPrompt(nextPromptId, participantDetails.code);
+        }
+      }
     }
   }, [
-    hasRecordedCurrentPrompt, isRecording, isPlaybackActive, isSessionComplete,
-    currentPromptIndex, triggerHaptic, unloadPlaybackSound
+    canGoNext, currentSection, currentSectionIndex, currentPromptInSectionIndex,
+    displayMode, hasRecordedCurrentPrompt, isSessionComplete,
+    triggerHaptic, unloadPlaybackSound, showModal, hideModal, router,
+    participantDetails, loadRecordingForPrompt
   ]);
 
-  const handlePreviousPrompt = useCallback(() => {
-    if (isRecording || isPlaybackActive || currentPromptIndex === null || currentPromptIndex <= 0) return;
-
-    triggerHaptic();
-    // Ensure playback stops when changing prompts
-    if (playbackSoundRef.current) {
-      unloadPlaybackSound();
-    }
-
-    const prevIndex = getPreviousPromptIndex(currentPromptIndex);
-    setCurrentPromptIndex(prevIndex);
-  }, [isRecording, isPlaybackActive, currentPromptIndex, triggerHaptic, unloadPlaybackSound]);
-
-  const initializeScreen = useCallback(async (isActive: boolean) => {
-    try {
-      console.log("initializeScreen: Getting participant details...");
-      const fetchedDetails = await getParticipantDetails();
-      if (!isActive) return;
-      console.log("initializeScreen: Participant details:", fetchedDetails);
-
-      if (!fetchedDetails || !isValidCode(fetchedDetails.code)) {
-        console.log("initializeScreen: No valid participant found, navigating to setup.");
-        if (isActive) {
-          Alert.alert("Setup Required", "No active participant found.", [{
-            text: 'Go to Participant Setup',
-            onPress: () => router.replace('/')
-          }]);
-        }
-        return;
-      }
-
-      console.log("initializeScreen: Getting recordings...");
-      const recordings = await getPendingRecordings();
-      if (!isActive) return;
-      console.log(`initializeScreen: Got ${recordings.length} recordings.`);
-
-      const participantRecordings = recordings.filter(r => r.participantCode === fetchedDetails.code);
-      const recordedPromptIds = new Set(participantRecordings.map(r => r.promptId));
-
-      let startingIndex = RECORDING_SCRIPT.findIndex(prompt => !recordedPromptIds.has(prompt.id));
-      let sessionComplete = false;
-
-      if (startingIndex === -1 && RECORDING_SCRIPT.length > 0) {
-        startingIndex = RECORDING_SCRIPT.length - 1;
-        sessionComplete = true;
-        console.log("initializeScreen: Session is complete for this participant.");
-      } else if (startingIndex === -1 && RECORDING_SCRIPT.length === 0) {
-        startingIndex = 0;
-        sessionComplete = true;
-        console.log("initializeScreen: Script is empty.");
-      } else {
-        console.log(`initializeScreen: First unrecorded index for participant: ${startingIndex}`);
-      }
-
-      if (isActive) {
-        console.log("initializeScreen: Setting component state...");
-        setParticipantDetails(fetchedDetails);
-        setCurrentPromptIndex(startingIndex);
-        setIsSessionComplete(sessionComplete);
-
-        // Load recording after state is set
-        if (startingIndex >= 0) {
-          await loadRecordingForPrompt(
-            RECORDING_SCRIPT[startingIndex]?.id,
-            fetchedDetails.code
-          );
-        }
-
-        setIsLoading(false);
-        console.log("initializeScreen: State update complete. isLoading: false");
-      }
-    } catch (error: any) {
-      console.error("initializeScreen: CATCH BLOCK - Error during initialization!", error);
-      if (isActive) {
-        setInitializationError(error.message || "Failed to load session data.");
-        setIsLoading(false);
-        Alert.alert("Initialization Error", error.message || "Could not load session data.");
-      }
-    }
-  }, [router, loadRecordingForPrompt]);
-
-
-  // --- Effects ---
-  // Cleanup on mount/unmount
   useEffect(() => {
     isMounted.current = true;
 
-    // Initialize audio settings once
-    Audio.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      allowsRecordingIOS: true,
-      interruptionModeIOS: InterruptionModeIOS.DoNotMix,
-      interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-    }).catch(console.error);
-
     return () => {
       isMounted.current = false;
-      console.log("RecordScreen: Unmounting, unloading playback sound.");
-      // Using direct call to unload rather than the callback to avoid dependency issues
-      if (playbackSoundRef.current) {
-        playbackSoundRef.current.unloadAsync().catch(console.error);
-        playbackSoundRef.current = null;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
       }
     };
   }, []);
 
-  // Update navigation title
+  // const handleModalError = useCallback((error: Error) => {
+  //   console.error("Modal Error:", error);
+  //   setIsConfirmationModalVisible(false);
+  // }, []);
+
+  const handlePreviousPrompt = useCallback(() => {
+    if (!canGoPrevious) return;
+    triggerHaptic();
+    unloadPlaybackSound();
+    if (currentPromptInSectionIndex > 0) {
+      const prevPromptIndex = currentPromptInSectionIndex - 1;
+      setCurrentPromptInSectionIndex(prevPromptIndex);
+      setDisplayMode('prompt');
+      const prevPromptId = currentSection?.prompts[prevPromptIndex]?.id;
+      if (prevPromptId && participantDetails?.code) {
+        loadRecordingForPrompt(prevPromptId, participantDetails.code);
+      } else {
+        setCurrentPromptRecordingUri(null); setCurrentPromptRecordingDuration(undefined);
+      }
+    } else if (currentSectionIndex > 0) {
+      const prevSectionIndex = currentSectionIndex - 1;
+      const prevSection = RECORDING_SECTIONS[prevSectionIndex];
+      const lastPromptIndexInPrevSection = prevSection.prompts.length - 1;
+      setCurrentSectionIndex(prevSectionIndex);
+      setCurrentPromptInSectionIndex(lastPromptIndexInPrevSection);
+      setDisplayMode('prompt');
+      const prevPromptId = prevSection?.prompts[lastPromptIndexInPrevSection]?.id;
+      if (prevPromptId && participantDetails?.code) {
+        loadRecordingForPrompt(prevPromptId, participantDetails.code);
+      } else {
+        setCurrentPromptRecordingUri(null); setCurrentPromptRecordingDuration(undefined);
+      }
+    }
+  }, [
+    canGoPrevious, currentSectionIndex, currentPromptInSectionIndex, currentSection,
+    participantDetails, triggerHaptic, unloadPlaybackSound, loadRecordingForPrompt
+  ]);
+
+  // --- Initialization (remains the same) ---
+  const initializeScreen = useCallback(async (isActive: boolean) => {
+    console.log("RecordScreen: Initializing screen...");
+    try {
+      // Load participant details first
+      const details = await getParticipantDetails();
+
+      if (!isActive) return;
+
+      if (!details || !isValidCode(details.code)) {
+        console.log("RecordScreen: No valid participant details found");
+        Alert.alert(
+          "Setup Required",
+          "Please set up participant details before recording.",
+          [{ text: "OK", onPress: () => router.replace("/") }]
+        );
+        return;
+      }
+
+      console.log("RecordScreen: Participant details loaded:", details);
+      setParticipantDetails(details);
+
+      // Get the last recorded position
+      const { sectionIndex, promptIndex } = await getLastRecordedPosition(details.code);
+      setCurrentSectionIndex(sectionIndex);
+      setCurrentPromptInSectionIndex(promptIndex);
+
+      // Set the correct display mode
+      setDisplayMode(sectionIndex && promptIndex === 0 ? 'intro' : 'prompt');
+
+      setIsLoading(false);
+
+    } catch (error) {
+      console.error("RecordScreen: Initialization error:", error);
+      if (isActive) {
+        setInitializationError("Failed to load participant details");
+        setIsLoading(false);
+      }
+    }
+  }, [router]);
+
+  // --- Effects (remain the same) ---
   useEffect(() => {
-    const newTitle = isSessionComplete
-      ? 'Session Complete'
-      : `Prompt ${(currentPromptIndex ?? 0) + 1}/${RECORDING_SCRIPT.length}`;
+    isMounted.current = true;
+    Audio.setAudioModeAsync({
+      allowsRecordingIOS: false, playsInSilentModeIOS: true, interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+      interruptionModeAndroid: InterruptionModeAndroid.DoNotMix, shouldDuckAndroid: true, playThroughEarpieceAndroid: false, staysActiveInBackground: false,
+    }).catch(e => console.error("Failed to set initial audio mode for playback:", e));
+    return () => { isMounted.current = false; console.log("RecordScreen: Unmounting, unloading playback sound."); unloadPlaybackSound(); };
+  }, [unloadPlaybackSound]);
+
+  useEffect(() => {
+    let newTitle = "Recording";
+    if (isSessionComplete) newTitle = 'Session Complete';
+    else if (displayMode === 'intro' && currentSection) newTitle = `Section: ${currentSection.title}`;
+    else if (currentPrompt) newTitle = `Prompt ${globalPromptIndex + 1}/${totalPrompts}`;
     navigation.setOptions({ title: newTitle });
-  }, [navigation, currentPromptIndex, isSessionComplete]);
+  }, [navigation, displayMode, currentSection, currentPrompt, globalPromptIndex, totalPrompts, isSessionComplete]);
 
-  // Load recording when prompt changes
   useEffect(() => {
-    console.log(`RecordScreen: currentPromptIndex changed to: ${currentPromptIndex}`);
+    console.log(`RecordScreen: Prompt or Mode changed. Section: ${currentSectionIndex}, Prompt Idx: ${currentPromptInSectionIndex}, Mode: ${displayMode}`);
+    unloadPlaybackSound();
+    if (displayMode === 'prompt' && currentPrompt?.id && participantDetails?.code) {
+      loadRecordingForPrompt(currentPrompt.id, participantDetails.code);
+    } else { setCurrentPromptRecordingUri(null); setCurrentPromptRecordingDuration(undefined); }
+  }, [currentPromptInSectionIndex, currentSectionIndex, displayMode, participantDetails, loadRecordingForPrompt, currentPrompt, unloadPlaybackSound]);
 
-    // Always unload previous playback when changing prompts
-    if (playbackSoundRef.current) {
-      playbackSoundRef.current.unloadAsync().catch(console.error);
-      playbackSoundRef.current = null;
-    }
+  useEffect(() => { if (recorderError) { Alert.alert('Recorder Error', recorderError); } }, [recorderError]);
 
-    const currentPromptId = currentPromptIndex !== null && currentPromptIndex >= 0 ?
-      RECORDING_SCRIPT[currentPromptIndex]?.id : undefined;
-    const currentParticipantCode = participantDetails?.code;
-
-    if (currentPromptIndex !== null && currentPromptId && currentParticipantCode) {
-      loadRecordingForPrompt(currentPromptId, currentParticipantCode);
-    } else {
-      setCurrentPromptRecordingUri(null);
-      setCurrentPromptRecordingDuration(undefined);
-    }
-  }, [currentPromptIndex, participantDetails]);
-
-  // Alert for recorder errors
-  useEffect(() => {
-    if (recorderError) {
-      console.error("Recorder Error State Updated:", recorderError);
-      Alert.alert('Recorder Error', recorderError);
-    }
-  }, [recorderError]);
-
-  // Focus effect for initialization
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
       console.log("RecordScreen: useFocusEffect - Running Initialization");
 
-      // Cleanup any existing playback to prevent memory leaks
-      if (playbackSoundRef.current) {
-        console.log("Cleaning up existing playback in useFocusEffect");
-        playbackSoundRef.current.unloadAsync().catch(console.error);
-        playbackSoundRef.current = null;
+      // Clear any existing timeout
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
       }
 
-      setIsLoading(true);
-      setInitializationError(null);
-      setParticipantDetails(null);
-      setCurrentPromptIndex(null);
-      setIsSessionComplete(false);
-      setCurrentPromptRecordingUri(null);
-      setCurrentPromptRecordingDuration(undefined);
-      setPlaybackStatus('idle');
+      // Reset only necessary states
+      const resetStates = () => {
+        if (isActive) {
+          // setIsConfirmationModalVisible(false);
+          setShowConfetti(false);
+          unloadPlaybackSound();
+          setIsLoading(true);
+          setInitializationError(null);
+          setParticipantDetails(null);
+          setCurrentPromptRecordingUri(null);
+          setCurrentPromptRecordingDuration(undefined);
+          playbackStateRef.status = 'idle';
+          playbackStateRef.error = null;
+          playbackStateRef.currentUri = null;
+          playbackStateRef.sound = null;
+          triggerPlaybackUiUpdate();
+        }
+      };
 
+      resetStates();
       initializeScreen(isActive);
 
       return () => {
         console.log("RecordScreen: useFocusEffect - Cleanup");
         isActive = false;
-
-        // Cleanup playback on blur
-        if (playbackSoundRef.current) {
-          console.log("Cleaning up playback in useFocusEffect cleanup");
-          playbackSoundRef.current.unloadAsync().catch(console.error);
-          playbackSoundRef.current = null;
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
         }
+        // Don't reset section and prompt indices on cleanup
+        resetStates();
       };
     }, [initializeScreen])
   );
 
+
+
   // --- Render Logic ---
   if (isLoading) {
-    return (
-      <ThemedSafeAreaView className="flex-1 justify-center items-center">
-        <ActivityIndicator size="large" color={primaryColor} />
-        <Text className="mt-4 text-neutral-600 dark:text-neutral-300">Loading session...</Text>
-      </ThemedSafeAreaView>
-    );
-  }
+      return (
+        <ThemedSafeAreaView className="flex-1 justify-center items-center">
+          <ActivityIndicator size="large" color={primaryColor} />
+          <Text className="mt-4 text-neutral-600 dark:text-neutral-300">Loading session...</Text>
+        </ThemedSafeAreaView>
+      );
+    }
 
   if (initializationError) {
-    return (
-      <ThemedSafeAreaView className="flex-1 justify-center items-center p-6">
-        <MaterialCommunityIcons name="alert-circle-outline" size={60} color={primaryColor} />
-        <Text className="mt-4 text-lg text-center text-danger-dark dark:text-danger">Error Loading Session</Text>
-        <Text className="mt-2 text-center text-neutral-600 dark:text-neutral-300">{initializationError}</Text>
-        <Button
-          title="Go Back" icon="arrow-left"
-          onPress={() => router.back()}
-          className="flex flex-row bg-primary mt-6 px-6 py-3 rounded-lg shadow"
-          textClassName="text-white font-semibold"
-        />
-      </ThemedSafeAreaView>
-    );
-  }
+      return (
+        <ThemedSafeAreaView className="flex-1 justify-center items-center p-6">
+          <MaterialCommunityIcons name="alert-circle-outline" size={60} color={dangerColor} />
+          <Text className="mt-4 text-lg text-center text-danger-dark dark:text-danger">Error Loading Session</Text>
+          <Text className="mt-2 text-center text-neutral-600 dark:text-neutral-300">{initializationError}</Text>
+          <Button title="Go Back" icon="arrow-left" onPress={() => router.back()} className="flex flex-row bg-primary mt-6 px-6 py-3 rounded-lg shadow" textClassName="text-white font-semibold" iconColor='white' />
+        </ThemedSafeAreaView>
+      );
+    }
 
-  // Main Recording Screen
+  // console.log("Rendering - Modal Visible:", isConfirmationModalVisible, "Display Mode:", displayMode); // Add log
+
   return (
     <ThemedSafeAreaView className="flex-1 bg-neutral-100 dark:bg-neutral-900">
-      {/* Custom Header Elements */}
+      {/* Header */}
       <View className="flex-row items-center justify-between px-4 pt-2 pb-1">
         <Button icon="arrow-left" onPress={() => router.back()} title="" className="p-2" iconSize={28} iconColor={iconColor} />
         <Text className="text-center font-semibold text-neutral-600 dark:text-neutral-300">
-          {isSessionComplete ? 'Session Complete' : `Prompt ${(currentPromptIndex ?? 0) + 1} / ${RECORDING_SCRIPT.length}`}
+          {/* Dynamic title setting seems to be missing, using navigation options instead is good */}
+          {navigation.getState().routes.find(r => r.name === 'record')?.params?.title || 'Recording'}
         </Text>
-        <View style={{ width: 40 }} /> {/* Spacer */}
+        <View style={{ width: 40 }} />
       </View>
 
       {/* Progress Bar */}
@@ -628,113 +701,99 @@ export default function RecordScreen() {
         <View style={{ width: `${progressPercent}%` }} className="h-full bg-primary dark:bg-primary-dark transition-all duration-300 ease-in-out" />
       </View>
 
-      <ScrollView
-        className="flex-1"
-        contentContainerClassName="flex-grow justify-between p-5"
-      >
-        {/* Top: Prompt Display Area */}
-        <View className="items-center flex-1 justify-center mb-6">
-          {isSessionComplete ? (
-            <View className="p-6 items-center">
-              <MaterialCommunityIcons name="party-popper" size={70} color="#10B981" />
-              <Text className="text-2xl font-bold text-neutral-800 mt-4 text-center dark:text-neutral-100">Session Complete!</Text>
-              <Text className="text-lg text-neutral-600 mt-2 text-center dark:text-neutral-400">You can now go back to review and upload.</Text>
-              <Button
-                title="Back to Home" icon="home-outline"
-                onPress={() => router.back()}
-                className="bg-primary dark:bg-primary-dark mt-8 px-8 py-3 rounded-lg shadow flex flex-row items-center justify-center"
-                textClassName="text-white text-lg font-semibold ml-2"
-                iconColor="white"
-              />
-            </View>
-          ) : currentPrompt ? (
-            <PromptDisplay
-              prompt={currentPrompt}
-              currentNumber={(currentPromptIndex ?? 0) + 1}
-              totalNumber={RECORDING_SCRIPT.length}
-              containerClassName="w-full items-center"
-              promptTextClassName="text-3xl md:text-4xl text-neutral-900 dark:text-neutral-100 leading-tight my-3 text-center font-medium"
-              infoTextClassName="text-center text-sm text-neutral-500 dark:text-neutral-400 mb-1 font-medium"
-              typeTextClassName="text-center text-xs font-bold uppercase tracking-wider text-primary dark:text-primary-light mb-3"
-              meaningTextClassName="text-center text-base italic text-neutral-600 dark:text-neutral-400 mt-2"
-            />
-          ) : (
-            <ActivityIndicator size="small" color={primaryColor} />
-          )}
-        </View>
-
-        {/* Bottom: Controls Area */}
-        {!isSessionComplete && (
-          <View className="items-center pb-4">
-            {/* Main Record/Stop Button */}
-            <TouchableOpacity
-              onPress={handleRecordStopPress}
-              disabled={(!canRecord && !isRecording) || isPlaybackActive}
-              activeOpacity={0.7}
-              className={`
-                rounded-full w-24 h-24 items-center justify-center shadow-lg elevation-5 mb-4
-                ${isRecording ? 'bg-danger dark:bg-danger-dark' : 'bg-success dark:bg-success-dark'}
-                ${(!canRecord && !isRecording) || isPlaybackActive ? 'bg-neutral-400 dark:bg-neutral-600 opacity-60' : ''}
-              `}
-            >
-              <MaterialCommunityIcons
-                name={isRecording ? "stop-circle-outline" : "microphone"}
-                size={44}
-                color="white"
-              />
-            </TouchableOpacity>
-
-            {/* Sound Wave & Status Text */}
-            <View className="h-16 justify-center items-center mb-4 w-full">
-              <SoundWaveAnimation
-                isAnimating={isRecording || playbackStatus === 'playing'}
-                barColor={isRecording ? dangerColor : primaryColor}
-              />
-              <Text className={`text-center text-base mt-2 h-6 capitalize ${recorderError || playbackError ? 'text-danger-dark dark:text-danger-light' : 'text-neutral-600 dark:text-neutral-400'}`}>
-                {statusText}
-              </Text>
-            </View>
-
-            {/* Secondary Controls: Prev / Play / Next */}
-            <View className="flex-row justify-between w-full max-w-sm mt-2 items-center px-4">
-              <Button
-                title="" icon="arrow-left-circle-outline" iconSize={40}
-                onPress={handlePreviousPrompt}
-                disabled={!canGoPrevious || isRecording || isPlaybackActive}
-                className="p-2 rounded-full"
-                iconColor={iconColor}
-                disabledClassName="opacity-30"
-              />
-
-              {/* Play/Pause Button (conditionally shown) */}
-              {showReplay ? (
-                <Button
-                  title=""
-                  icon={playbackStatus === 'playing' ? "pause-circle-outline" : "play-circle-outline"}
-                  iconSize={56}
-                  onPress={handlePlayPause}
-                  disabled={isRecording || playbackStatus === 'loading'}
-                  isLoading={playbackStatus === 'loading'}
-                  className="p-2 rounded-full"
-                  iconColor={primaryColor}
-                  disabledClassName="opacity-30"
-                />
-              ) : (
-                <View style={{ width: 60, height: 60 }} />
-              )}
-
-              <Button
-                title="" icon="arrow-right-circle-outline" iconSize={40}
-                onPress={handleNextPrompt}
-                disabled={!canGoNext || isRecording || isPlaybackActive}
-                className="p-2 rounded-full"
-                iconColor={iconColor}
-                disabledClassName="opacity-30"
-              />
-            </View>
+      {/* --- Main Content Area --- */}
+      <View className="flex-1 justify-center items-center">
+        {displayMode === 'intro' && !isSessionComplete && currentSection ? (
+          <SectionIntro
+            sectionTitle={currentSection.title}
+            sectionDescription={currentSection.description}
+            sectionNumber={currentSectionIndex + 1}
+            totalSections={RECORDING_SECTIONS.length}
+            onStartSection={handleStartSection}
+          />
+        ) : isSessionComplete ? (
+          <View className="p-6 items-center">
+            <MaterialCommunityIcons name="party-popper" size={70} color="#10B981" />
+            <Text className="text-2xl font-bold text-neutral-800 mt-4 text-center dark:text-neutral-100">Session Complete!</Text>
+            <Text className="text-lg text-neutral-600 mt-2 text-center dark:text-neutral-400">You can now go back to review and upload.</Text>
+            <Button title="Back to Home" icon="home-outline" onPress={() => router.back()} className="bg-primary dark:bg-primary-dark mt-8 px-8 py-3 rounded-lg shadow flex flex-row items-center justify-center" textClassName="text-white text-lg font-semibold ml-2" iconColor="white" />
           </View>
+        ) : currentPrompt ? (
+          <ScrollView className="w-full" contentContainerStyle={styles.scrollViewContent} showsVerticalScrollIndicator={false}>
+            <PromptDisplay prompt={currentPrompt} currentNumber={globalPromptIndex + 1} totalNumber={totalPrompts} containerClassName="w-full items-center px-4 py-6" promptTextClassName="text-3xl md:text-4xl text-neutral-900 dark:text-neutral-100 leading-tight my-3 text-center font-medium" infoTextClassName="text-center text-sm text-neutral-500 dark:text-neutral-400 mb-1 font-medium" typeTextClassName="text-center text-xs font-bold uppercase tracking-wider text-primary dark:text-primary-light mb-3" meaningTextClassName="text-center text-base italic text-neutral-600 dark:text-neutral-400 mt-2" />
+          </ScrollView>
+        ) : (
+          <ActivityIndicator size="small" color={primaryColor} />
         )}
-      </ScrollView>
+      </View>
+
+      {/* --- Bottom Controls Area --- */}
+      {/* Ensure controls are disabled when modal is visible */}
+      {!isSessionComplete && displayMode === 'prompt' && (
+        <View className={`w-full items-center pt-3 pb-6 px-4 border-t border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-900 `}
+          // pointerEvents={isConfirmationModalVisible ? 'none' : 'auto'}
+        >
+          {/* Record/Stop Button */}
+          <TouchableOpacity onPress={handleRecordStopPress} disabled={!canRecord && !isRecording } activeOpacity={0.7} className={`rounded-full w-20 h-20 items-center justify-center shadow-lg elevation-5 mb-3 ${isRecording ? 'bg-danger dark:bg-danger-dark' : 'bg-success dark:bg-success-dark'} ${(!canRecord && !isRecording ) ? 'bg-neutral-400 dark:bg-neutral-600 opacity-60' : ''}`}>
+            <MaterialCommunityIcons name={isRecording ? "stop-circle-outline" : "microphone"} size={40} color="white" />
+          </TouchableOpacity>
+
+          {/* Sound Wave & Status Text */}
+          <View className="h-12 justify-center items-center mb-3 w-full">
+            <SoundWaveAnimation isAnimating={isRecording || playbackStateRef.status === 'playing'} barColor={isRecording ? dangerColor : primaryColor} />
+            <Text className={`text-center text-sm mt-1 h-5 capitalize ${recorderError || playbackStateRef.error ? 'text-danger-dark dark:text-danger-light' : 'text-neutral-600 dark:text-neutral-400'}`}>
+              {statusText}
+            </Text>
+          </View>
+
+          {/* Prev / Play / Next Controls */}
+          <View className="flex-row justify-between w-full max-w-sm items-center px-2">
+            <Button title="" icon="arrow-left-circle-outline" iconSize={40} onPress={handlePreviousPrompt} disabled={!canGoPrevious } className="p-2 rounded-full" iconColor={iconColor} disabledClassName="opacity-30" />
+            {showReplay ? (
+              <Button title="" icon={playbackStateRef.status === 'playing' ? "pause-circle-outline" : "play-circle-outline"} iconSize={56} onPress={handlePlayPause} disabled={isRecording || playbackStateRef.status === 'loading' } isLoading={playbackStateRef.status === 'loading'} className="p-2 rounded-full" iconColor={primaryColor} disabledClassName="opacity-30" />
+            ) : (
+              <View style={{ width: 60, height: 60 }} />
+            )}
+            <Button title="" icon="arrow-right-circle-outline" iconSize={40} onPress={handleNextPrompt} disabled={!canGoNext } className="p-2 rounded-full" iconColor={iconColor} disabledClassName="opacity-30" />
+          </View>
+        </View>
+      )}
+
+      {/* --- Confetti Layer (Wrapper View) --- */}
+      {showConfetti && (
+        <View style={styles.confettiLayer} pointerEvents="none">
+          <ConfettiCannon ref={confettiRef} count={250} origin={{ x: screenWidth / 2, y: -20 }} fadeOut={true} explosionSpeed={500} fallSpeed={3500} colors={[primaryColor || '#4F46E5', successColor || '#10B981', '#F59E0B', '#EF4444']} autoStart={true} />
+        </View>
+      )}
+
+      {/* --- Confirmation Modal --- */}
+      <SectionCompleteDialog
+            visible={isSectionCompleteModalVisible}
+            onClose={() => setIsSectionCompleteModalVisible(false)}
+            sectionNumber={currentSectionIndex + 1}
+            sectionTitle={currentSection?.title || ''}
+            onContinue={() => {
+              setIsSectionCompleteModalVisible(false);
+              const nextSectionIndex = currentSectionIndex + 1;
+              if (nextSectionIndex < RECORDING_SECTIONS.length) {
+                setCurrentSectionIndex(nextSectionIndex);
+                setCurrentPromptInSectionIndex(0);
+                setDisplayMode('intro');
+                setCurrentPromptRecordingUri(null);
+                setCurrentPromptRecordingDuration(undefined);
+              }
+            }}
+            onGoBack={() => {
+              setIsSectionCompleteModalVisible(false);
+              router.back();
+            }}
+          />
     </ThemedSafeAreaView>
   );
 }
+
+// --- Styles ---
+const styles = StyleSheet.create({
+  scrollViewContent: { flexGrow: 1, justifyContent: 'center', paddingVertical: 20 },
+  confettiLayer: { ...StyleSheet.absoluteFillObject, zIndex: 20, pointerEvents: 'none' }, // Added pointerEvents
+});

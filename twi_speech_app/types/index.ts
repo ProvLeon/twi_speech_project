@@ -5,6 +5,14 @@ export interface ScriptPrompt {
   meaning?: string; // Optional: English meaning/translation of the 'text' field
 }
 
+export interface RecordingSection {
+  id: string;
+  title: string;
+  description: string;
+  prompts: ScriptPrompt[];
+}
+
+
 // NEW: Define structure for participant details
 export interface ParticipantDetails {
   code: string;
