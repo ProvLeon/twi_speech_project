@@ -101,9 +101,9 @@ export default function RecordScreen() {
   const canRecord = (recordingStatus === 'ready' || recordingStatus === 'stopped')
     ? displayMode === 'prompt' && !isSessionComplete && !isPlaybackActive
     : false;
-  const showReplay =  hasRecordedCurrentPrompt && !isRecording && displayMode === 'prompt';
-  const canGoNext =  displayMode === 'prompt' && hasRecordedCurrentPrompt && !isRecording && !isPlaybackActive && !isSessionComplete;
-  const canGoPrevious =  displayMode === 'prompt' && !isRecording && !isPlaybackActive && (currentSectionIndex > 0 || currentPromptInSectionIndex > 0);
+  const showReplay = hasRecordedCurrentPrompt && !isRecording && displayMode === 'prompt';
+  const canGoNext = displayMode === 'prompt' && hasRecordedCurrentPrompt && !isRecording && !isPlaybackActive && !isSessionComplete;
+  const canGoPrevious = displayMode === 'prompt' && !isRecording && !isPlaybackActive && (currentSectionIndex > 0 || currentPromptInSectionIndex > 0);
 
   const getLastRecordedPosition = async (participantCode: string) => {
     try {
@@ -663,24 +663,24 @@ export default function RecordScreen() {
 
   // --- Render Logic ---
   if (isLoading) {
-      return (
-        <ThemedSafeAreaView className="flex-1 justify-center items-center">
-          <ActivityIndicator size="large" color={primaryColor} />
-          <Text className="mt-4 text-neutral-600 dark:text-neutral-300">Loading session...</Text>
-        </ThemedSafeAreaView>
-      );
-    }
+    return (
+      <ThemedSafeAreaView className="flex-1 justify-center items-center">
+        <ActivityIndicator size="large" color={primaryColor} />
+        <Text className="mt-4 text-neutral-600 dark:text-neutral-300">Loading session...</Text>
+      </ThemedSafeAreaView>
+    );
+  }
 
   if (initializationError) {
-      return (
-        <ThemedSafeAreaView className="flex-1 justify-center items-center p-6">
-          <MaterialCommunityIcons name="alert-circle-outline" size={60} color={dangerColor} />
-          <Text className="mt-4 text-lg text-center text-danger-dark dark:text-danger">Error Loading Session</Text>
-          <Text className="mt-2 text-center text-neutral-600 dark:text-neutral-300">{initializationError}</Text>
-          <Button title="Go Back" icon="arrow-left" onPress={() => router.back()} className="flex flex-row bg-primary mt-6 px-6 py-3 rounded-lg shadow" textClassName="text-white font-semibold" iconColor='white' />
-        </ThemedSafeAreaView>
-      );
-    }
+    return (
+      <ThemedSafeAreaView className="flex-1 justify-center items-center p-6">
+        <MaterialCommunityIcons name="alert-circle-outline" size={60} color={dangerColor} />
+        <Text className="mt-4 text-lg text-center text-danger-dark dark:text-danger">Error Loading Session</Text>
+        <Text className="mt-2 text-center text-neutral-600 dark:text-neutral-300">{initializationError}</Text>
+        <Button title="Go Back" icon="arrow-left" onPress={() => router.back()} className="flex flex-row bg-primary mt-6 px-6 py-3 rounded-lg shadow" textClassName="text-white font-semibold" iconColor='white' />
+      </ThemedSafeAreaView>
+    );
+  }
 
   // console.log("Rendering - Modal Visible:", isConfirmationModalVisible, "Display Mode:", displayMode); // Add log
 
@@ -731,10 +731,10 @@ export default function RecordScreen() {
       {/* Ensure controls are disabled when modal is visible */}
       {!isSessionComplete && displayMode === 'prompt' && (
         <View className={`w-full items-center pt-3 pb-6 px-4 border-t border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-900 `}
-          // pointerEvents={isConfirmationModalVisible ? 'none' : 'auto'}
+        // pointerEvents={isConfirmationModalVisible ? 'none' : 'auto'}
         >
           {/* Record/Stop Button */}
-          <TouchableOpacity onPress={handleRecordStopPress} disabled={!canRecord && !isRecording } activeOpacity={0.7} className={`rounded-full w-20 h-20 items-center justify-center shadow-lg elevation-5 mb-3 ${isRecording ? 'bg-danger dark:bg-danger-dark' : 'bg-success dark:bg-success-dark'} ${(!canRecord && !isRecording ) ? 'bg-neutral-400 dark:bg-neutral-600 opacity-60' : ''}`}>
+          <TouchableOpacity onPress={handleRecordStopPress} disabled={!canRecord && !isRecording} activeOpacity={0.7} className={`rounded-full w-20 h-20 items-center justify-center shadow-lg elevation-5 mb-3 ${isRecording ? 'bg-danger dark:bg-danger-dark' : 'bg-success dark:bg-success-dark'} ${(!canRecord && !isRecording) ? 'bg-neutral-400 dark:bg-neutral-600 opacity-60' : ''}`}>
             <MaterialCommunityIcons name={isRecording ? "stop-circle-outline" : "microphone"} size={40} color="white" />
           </TouchableOpacity>
 
@@ -748,13 +748,13 @@ export default function RecordScreen() {
 
           {/* Prev / Play / Next Controls */}
           <View className="flex-row justify-between w-full max-w-sm items-center px-2">
-            <Button title="" icon="arrow-left-circle-outline" iconSize={40} onPress={handlePreviousPrompt} disabled={!canGoPrevious } className="p-2 rounded-full" iconColor={iconColor} disabledClassName="opacity-30" />
+            <Button title="" icon="arrow-left-circle-outline" iconSize={40} onPress={handlePreviousPrompt} disabled={!canGoPrevious} className="p-2 rounded-full" iconColor={iconColor} disabledClassName="opacity-30" />
             {showReplay ? (
-              <Button title="" icon={playbackStateRef.status === 'playing' ? "pause-circle-outline" : "play-circle-outline"} iconSize={56} onPress={handlePlayPause} disabled={isRecording || playbackStateRef.status === 'loading' } isLoading={playbackStateRef.status === 'loading'} className="p-2 rounded-full" iconColor={primaryColor} disabledClassName="opacity-30" />
+              <Button title="" icon={playbackStateRef.status === 'playing' ? "pause-circle-outline" : "play-circle-outline"} iconSize={56} onPress={handlePlayPause} disabled={isRecording || playbackStateRef.status === 'loading'} isLoading={playbackStateRef.status === 'loading'} className="p-2 rounded-full" iconColor={primaryColor} disabledClassName="opacity-30" />
             ) : (
               <View style={{ width: 60, height: 60 }} />
             )}
-            <Button title="" icon="arrow-right-circle-outline" iconSize={40} onPress={handleNextPrompt} disabled={!canGoNext } className="p-2 rounded-full" iconColor={iconColor} disabledClassName="opacity-30" />
+            <Button title="" icon="arrow-right-circle-outline" iconSize={40} onPress={handleNextPrompt} disabled={!canGoNext} className="p-2 rounded-full" iconColor={iconColor} disabledClassName="opacity-30" />
           </View>
         </View>
       )}
@@ -767,27 +767,29 @@ export default function RecordScreen() {
       )}
 
       {/* --- Confirmation Modal --- */}
-      <SectionCompleteDialog
-            visible={isSectionCompleteModalVisible}
-            onClose={() => setIsSectionCompleteModalVisible(false)}
-            sectionNumber={currentSectionIndex + 1}
-            sectionTitle={currentSection?.title || ''}
-            onContinue={() => {
-              setIsSectionCompleteModalVisible(false);
-              const nextSectionIndex = currentSectionIndex + 1;
-              if (nextSectionIndex < RECORDING_SECTIONS.length) {
-                setCurrentSectionIndex(nextSectionIndex);
-                setCurrentPromptInSectionIndex(0);
-                setDisplayMode('intro');
-                setCurrentPromptRecordingUri(null);
-                setCurrentPromptRecordingDuration(undefined);
-              }
-            }}
-            onGoBack={() => {
-              setIsSectionCompleteModalVisible(false);
-              router.back();
-            }}
-          />
+      {isSectionCompleteModalVisible && (
+        <SectionCompleteDialog
+          visible={isSectionCompleteModalVisible}
+          onClose={() => setIsSectionCompleteModalVisible(false)}
+          sectionNumber={currentSectionIndex + 1}
+          sectionTitle={currentSection?.title || ''}
+          onContinue={() => {
+            setIsSectionCompleteModalVisible(false);
+            const nextSectionIndex = currentSectionIndex + 1;
+            if (nextSectionIndex < RECORDING_SECTIONS.length) {
+              setCurrentSectionIndex(nextSectionIndex);
+              setCurrentPromptInSectionIndex(0);
+              setDisplayMode('intro');
+              setCurrentPromptRecordingUri(null);
+              setCurrentPromptRecordingDuration(undefined);
+            }
+          }}
+          onGoBack={() => {
+            setIsSectionCompleteModalVisible(false);
+            router.back();
+          }}
+        />)
+      }
     </ThemedSafeAreaView>
   );
 }

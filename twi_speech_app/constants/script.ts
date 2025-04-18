@@ -168,13 +168,13 @@ const scriptD: ScriptPrompt[] = [
 ]
 const spontaneousPrompts: ScriptPrompt[] = [
   { id: 'Spontaneous_1', type: 'spontaneous', text: 'Introduce Yourself – Name, age, where you live, what you do. (Mesrɛ wo, ka wo ho asɛm kyerɛ me. Wo din, w’adi mfeɛ sɛn, ɛhe na wote, adwuma bɛn na wokɔ?)' },
-  { id: 'Spontaneous_2', type: 'spontaneous', text: 'Daily Routine – How you start and end your day. (Kyerɛ me sɛnea wo da no kɔyɛ fiti anɔpa kɔpem anadwo)' },
+  { id: 'Spontaneous_2', type: 'spontaneous', text: 'Daily Routine – How you start and end your day. (Kyerɛ me sɛnea wo da no kɔeɛ fiti anɔpa kɔpem anadwo)' },
   { id: 'Spontaneous_3', type: 'spontaneous', text: 'Describe Your Environment – Talk about what you see around you right now. (Kasa fa nnoɔma a ɛwɔ baabi a wote seesei yi ho.)' },
   { id: 'Spontaneous_4', type: 'spontaneous', text: 'Ka asɛm bi a ɛsi nnansa yi ara a ɛmaa w\'ani gyeeɛ paa anaasɛ ɛmaa wo werɛ hoeɛ ho asɛm kyerɛ me.Adɛn nti na ɛte saa?. (Tell me about something that happened recently that made you very happy or very sad.Why did it make you feel that way ?)' },
   { id: 'Spontaneous_5', type: 'spontaneous', text: 'Kyerɛkyerɛ me sɛnea yɛnoa Twi aduane a wopɛ pa ara no fiase kɔpem awieeɛ. Nnoɔma bɛn na wohia?. (Explain to me how your favorite Twi food is prepared from start to finish.What ingredients do you need?)' },
   { id: 'Spontaneous_6', type: 'spontaneous', text: 'Hobbies & Interests – What do you like to do in your free time? (Dɛn na wopɛ sɛ woyɛ wɔ wo bere a w\'anya fa no mu?)' },
   { id: 'Spontaneous_7', type: 'spontaneous', text: 'Faako a woteɛ no, kyerɛkyerɛ akwantuo a wofa firi wo fie kɔ w\'adwumam anaa sukuu mu. (Where you live, describe the journey you take from your home to your workplace or school.)' },
-  { id: 'Spontaneous_8', type: 'spontaneous', text: 'Sɛ wohyia ɔhaw bi wɔ w\'asetenam a, hwan na odi kan boa wo, na ɔkwan bɛn so?. (If you face a problem in your life, who helps you first, and in what way ?)' }
+  { id: 'Spontaneous_8', type: 'spontaneous', text: 'Sɛ wohyia ɔhaw bi wɔ w\'asetenam a, hwan na odi kan boa wo, na ɛkwan bɛn so?. (If you face a problem in your life, who helps you first, and in what way ?)' }
 ]
 
 // --- Define Sections ---

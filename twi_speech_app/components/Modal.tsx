@@ -1,9 +1,9 @@
 import React from 'react';
-import { Modal as RNModal, View, StyleSheet, TouchableOpacity, Dimensions, Platform } from 'react-native';
+import { Modal as RNModal, View, StyleSheet, TouchableOpacity, Dimensions, Platform, Text } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ThemedView } from './ThemedView';
 import { useThemeColor } from '@/hooks/useThemeColor';
-import {Button} from './Button'
+import { Button } from './Button'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -29,9 +29,9 @@ export const Modal: React.FC<ModalProps> = ({
       transparent
       animationType="slide"
       onRequestClose={onClose}
-      statusBarTranslucent={Platform.OS === 'android'}
+    // statusBarTranslucent={Platform.OS === 'android'}
     >
-      <View style={styles.overlay}>
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0, 0, 0, 0.5)', padding: 20 }}>
         <ThemedView style={styles.content}>
           {showCloseButton && (
             <Button

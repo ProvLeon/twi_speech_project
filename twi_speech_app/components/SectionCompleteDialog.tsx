@@ -27,7 +27,7 @@ export const SectionCompleteDialog: React.FC<SectionCompleteDialogProps> = ({
   const secondaryTextColor = useThemeColor({}, 'secondaryText');
 
   return (
-    <Modal visible={visible} onClose={onClose}>
+    <Modal visible={true} onClose={onClose}>
       <View style={styles.container}>
         {/* <Button
           title=""
