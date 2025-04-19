@@ -9,6 +9,8 @@ from datetime import datetime
 from .config import settings
 import pytz
 
+EXPECTED_TOTAL_RECORDINGS = 163 # Or import
+SPONTANEOUS_PROMPTS_COUNT = 8
 
 # Get timezone from config or define directly
 try:
@@ -40,7 +42,7 @@ def _convert_objectid_to_str(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str
 async def check_recording_completion(
     rec_collection: AsyncIOMotorCollection,
     speaker_id: ObjectId,
-    required_total: int = 163
+    required_total: int = EXPECTED_TOTAL_RECORDINGS
 ) -> RecordingProgress:
     """Check if a participant has completed all required recordings."""
     try:

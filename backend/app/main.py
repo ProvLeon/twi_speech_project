@@ -20,7 +20,7 @@ from .database import connect_to_mongo, close_mongo_connection, get_recordings_c
 from .r2 import upload_file_to_r2, get_r2_public_url, delete_file_from_r2
 # Import new/updated models and crud functions
 from .models import (
-    AudioMetadataForm, RecordingDocument,SpeakerDocument, UploadResponse, TranscriptionInput, DeleteSummaryResponse
+    AudioMetadataForm, RecordingDocument, RecordingProgress,SpeakerDocument, UploadResponse, TranscriptionInput, DeleteSummaryResponse
 )
 from .crud import (
     check_recording_completion, create_recording_entry, get_recordings_basic as get_recordings,
@@ -176,11 +176,10 @@ async def upload_audio_recording(
         # 5. Insert recording metadata into MongoDB
         recording_db_id = await create_recording_entry(rec_collection, recording_doc_data)
 
-        is_complete = await check_recording_completion(
-                    rec_collection,
-                    spk_collection,
-                    str(speaker_id_obj)
-
+        progress_data: RecordingProgress = await check_recording_completion(
+                    rec_collection=rec_collection,
+                    speaker_id=speaker_id_obj  # Pass the ObjectId
+                    # required_total=EXPECTED_TOTAL_RECORDINGS # Optional: Pass constant if used in crud.py
                 )
 
         # 6. Return success response
@@ -191,7 +190,7 @@ async def upload_audio_recording(
             speaker_db_id=str(speaker_id_obj), # Convert speaker ObjectId to string
             participant_code=participant_code,
             prompt_id=prompt_id,
-            recordings_complete=is_complete
+            progress=progress_data
         )
 
     except ClientError as e: # R2 Error

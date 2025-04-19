@@ -19,7 +19,6 @@ import { ThemedSafeAreaView } from '@/components/ThemedSafeAreaView';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { isValidCode } from '@/lib/utils';
 import { SectionCompleteDialog } from '@/components/SectionCompleteDialog'; // Ensure this path is correct
-import { useModal } from '@/context/ModalContext';
 
 type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'stopped' | 'error';
 type DisplayMode = 'intro' | 'prompt';
@@ -41,8 +40,6 @@ export default function RecordScreen() {
   // --- Hooks ---
   const navigation = useNavigation();
   const router = useRouter();
-
-  const { showModal, hideModal } = useModal();
 
   const primaryColor = useThemeColor({}, 'tint');
   const iconColor = useThemeColor({}, 'icon');
