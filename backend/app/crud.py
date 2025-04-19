@@ -1,7 +1,7 @@
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorCursor
 from pymongo import ReturnDocument
 from pydantic import ValidationError
-from .models import RecordingDocument, TranscriptionInput, SpeakerDocument
+from .models import RecordingDocument, RecordingProgress, TranscriptionInput, SpeakerDocument
 from bson import ObjectId, errors # Keep ObjectId import here
 import logging
 from typing import List, Dict, Any, Optional, Tuple
@@ -37,6 +37,42 @@ def _convert_objectid_to_str(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str
 
     return result
 
+async def check_recording_completion(
+    rec_collection: AsyncIOMotorCollection,
+    speaker_id: ObjectId,
+    required_total: int = 163
+) -> RecordingProgress:
+    """Check if a participant has completed all required recordings."""
+    try:
+        total_recordings = await rec_collection.count_documents({
+            "speaker_id": speaker_id,
+            "transcription_status": {"$ne": "pending"}
+        })
+
+        # Count scripted and spontaneous separately
+        scripted_count = await rec_collection.count_documents({
+            "speaker_id": speaker_id,
+            "prompt_id": {"$not": {"$regex": "^Spontaneous_"}}
+        })
+
+        spontaneous_count = await rec_collection.count_documents({
+            "speaker_id": speaker_id,
+            "prompt_id": {"$regex": "^Spontaneous_"}
+        })
+
+        is_complete = (total_recordings >= required_total and
+                      spontaneous_count >= SPONTANEOUS_PROMPTS_COUNT and
+                      scripted_count >= (required_total - SPONTANEOUS_PROMPTS_COUNT))
+
+        return RecordingProgress(
+            total_recordings=total_recordings,
+            total_required=required_total,
+            is_complete=is_complete
+        )
+
+    except Exception as e:
+        logger.error(f"Error checking recording completion: {e}")
+        return RecordingProgress(total_recordings=0, is_complete=False)
 
 async def get_or_create_speaker(
     collection: AsyncIOMotorCollection,

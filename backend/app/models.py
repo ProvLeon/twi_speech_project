@@ -38,7 +38,9 @@ class SpeakerDocument(BaseModel):
                 "age_range": "26-35",
                 "gender": "Female",
                 "created_at": "2025-04-01T10:00:00+00:00",
-                "updated_at": None
+                "updated_at": None,
+                "recordings_complete": False,
+                "total_recordings": 0,
             }
         }
 
@@ -65,6 +67,12 @@ class AudioMetadataForm(BaseModel):
 # --- TranscriptionInput remains the same ---
 class TranscriptionInput(BaseModel):
     transcription: str = Field(..., description="The transcribed text for the audio recording.")
+
+class RecordingProgress(BaseModel):
+    total_recordings: int
+    total_required: int = Field(default=163)  # Your expected total
+    is_complete: bool = Field(default=False)
+
 
 # --- RecordingDocument (inherits the new prompt_text field) ---
 class RecordingDocument(BaseModel):
@@ -124,9 +132,10 @@ class DeleteSummaryResponse(BaseModel):
 
 
 class UploadResponse(BaseModel):
-    message: str = "Upload successful"
+    message: str
     file_url: str
-    recording_db_id: str # ID of the RecordingDocument
-    speaker_db_id: Optional[str] = None # ID of the SpeakerDocument (if created/found)
+    recording_db_id: str
+    speaker_db_id: str
     participant_code: str
     prompt_id: str
+    progress: RecordingProgress
