@@ -1,3 +1,4 @@
+import { EXPECTED_TOTAL_RECORDINGS } from '@/constants/script';
 import { ParticipantDetails, RecordingMetadata } from '@/types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
@@ -41,7 +42,13 @@ export const getAllParticipants = async (): Promise<ParticipantDetails[]> => {
     const jsonValue = await AsyncStorage.getItem(ALL_PARTICIPANTS_KEY);
     const participants = safeJsonParse<ParticipantDetails[]>(jsonValue, []);
     // Filter to ensure only valid participants are returned
-    return participants.filter(p => p && isValidCode(p.code));
+    return participants
+      .filter(p => p && isValidCode(p.code))
+      .map(p => ({
+        ...p,
+        // Ensure progress exists, initialize if not
+        progress: p.progress ?? { total_recordings: 0, total_required: EXPECTED_TOTAL_RECORDINGS, is_complete: false }
+      }));
   } catch (e) {
     console.error('[storage] Failed to fetch all participants:', e);
     return [];
@@ -56,23 +63,28 @@ export const saveParticipantToList = async (details: ParticipantDetails): Promis
       return false;
     }
 
+    const detailsToSave: ParticipantDetails = {
+      ...details,
+      progress: details.progress ?? { total_recordings: 0, total_required: EXPECTED_TOTAL_RECORDINGS, is_complete: false }
+    };
+
     const allParticipants = await getAllParticipants();
 
     // Check if this participant already exists (by code)
-    const existingIndex = allParticipants.findIndex(p => p.code === details.code);
+    const existingIndex = allParticipants.findIndex(p => p.code === detailsToSave.code);
 
     if (existingIndex >= 0) {
       // Update existing participant
-      allParticipants[existingIndex] = details;
+      allParticipants[existingIndex] = detailsToSave;
     } else {
       // Add new participant
-      allParticipants.push(details);
+      allParticipants.push(detailsToSave);
     }
 
     // Save updated list
     const jsonValue = JSON.stringify(allParticipants);
     await AsyncStorage.setItem(ALL_PARTICIPANTS_KEY, jsonValue);
-    console.log(`[storage] Saved participant ${details.code} to participant list`);
+    console.log(`[storage] Saved participant ${detailsToSave.code} to participant list`);
     return true;
   } catch (e) {
     console.error('[storage] Failed to save participant to list:', e);
@@ -116,7 +128,13 @@ export const getParticipantByCode = async (code: string): Promise<ParticipantDet
   try {
     const allParticipants = await getAllParticipants();
     const participant = allParticipants.find(p => p.code === code);
-    return participant || null;
+    if (participant) {
+      return {
+        ...participant,
+        progress: participant.progress ?? { total_recordings: 0, total_required: EXPECTED_TOTAL_RECORDINGS, is_complete: false }
+      };
+    }
+    return null;
   } catch (e) {
     console.error(`[storage] Failed to get participant by code ${code}:`, e);
     return null;
@@ -131,12 +149,17 @@ export const saveParticipantDetails = async (details: ParticipantDetails): Promi
       return false;
     }
 
+    const detailsToSave: ParticipantDetails = {
+      ...details,
+      progress: details.progress ?? { total_recordings: 0, total_required: EXPECTED_TOTAL_RECORDINGS, is_complete: false }
+    };
+
     // Save to current participant
-    const jsonValue = JSON.stringify(details);
+    const jsonValue = JSON.stringify(detailsToSave);
     await AsyncStorage.setItem(PARTICIPANT_DETAILS_KEY, jsonValue);
 
     // Also add/update in all participants list
-    await saveParticipantToList(details);
+    await saveParticipantToList(detailsToSave);
 
     console.log('[storage] Participant details saved successfully:', details);
     return true;
@@ -150,8 +173,12 @@ export const getParticipantDetails = async (): Promise<ParticipantDetails | null
   try {
     const jsonValue = await AsyncStorage.getItem(PARTICIPANT_DETAILS_KEY);
     const details = safeJsonParse<ParticipantDetails | null>(jsonValue, null);
-    if (details && isValidCode(details.code)) { // Use validator
-      return details;
+    if (details && isValidCode(details.code)) {
+      // Ensure progress is initialized if missing from storage
+      return {
+        ...details,
+        progress: details.progress ?? { total_recordings: 0, total_required: EXPECTED_TOTAL_RECORDINGS, is_complete: false }
+      };
     }
     if (jsonValue) { // Log if data existed but was invalid
       console.warn('[storage] Participant details found but failed validation:', details);

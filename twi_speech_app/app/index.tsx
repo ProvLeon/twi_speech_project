@@ -15,12 +15,11 @@ import {
   deleteAllDeviceRecordings,
   deleteAllRecordingsForParticipant,
   getAllParticipants,
-  ALL_PARTICIPANTS_KEY,
-  PARTICIPANT_DETAILS_KEY,
+  getRecordingsForParticipant,
 } from '@/lib/storage';
 import { uploadRecording } from '@/lib/api';
 import * as Network from 'expo-network';
-import { RecordingMetadata, ParticipantDetails } from '@/types';
+import { RecordingMetadata, ParticipantDetails, UploadResponse, RecordingProgress } from '@/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import SetupScreenContent from '@/components/SetupScreenContent';
 import { ThemedSafeAreaView } from '@/components/ThemedSafeAreaView';
@@ -29,14 +28,13 @@ import { useThemeColor } from '@/hooks/useThemeColor';
 import { ParticipantSelector } from '@/components/ParticipantSelector';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Redirect } from "expo-router";
-
+import { EXPECTED_TOTAL_RECORDINGS } from '@/constants/script'; // Import constant
 
 const WELCOME_SEEN_KEY = 'welcomeScreenSeen_v1';
 
 
 type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'error';
 type ViewMode = 'participant' | 'settings' | 'select-participant' | 'create-participant' | 'edit-participant' | 'participant-recordings';
-
 
 
 
@@ -153,9 +151,18 @@ export default function HomeScreen() {
     console.log("HomeScreen: Refresh complete.");
   }, [loadAllRecordings, loadParticipantCount, checkNetwork, triggerHaptic]);
 
+  const localRecordingCount = useMemo(() => {
+    if (viewMode !== 'participant' || !participantDetails?.code) {
+      return 0;
+    }
+    // Filter all recordings specifically for the current participant code
+    return allRecordings.filter(rec => rec.participantCode === participantDetails.code).length;
+  }, [allRecordings, participantDetails?.code, viewMode]);
+
   const displayedRecordings = useMemo(() => {
     if (viewMode === 'settings') return allRecordings;
-    if ((viewMode === 'participant' || viewMode === 'select-participant' || viewMode === 'create-participant') && participantDetails?.code) {
+
+    if (viewMode === 'participant' && participantDetails?.code) {
       return allRecordings.filter(rec => rec.participantCode === participantDetails.code);
     }
     return [];
@@ -190,8 +197,8 @@ export default function HomeScreen() {
 
       if (shouldEnterSetup) {
         // Check if we have any participants already
-        const allParticipants = await getAllParticipants();
-        if (Array.isArray(allParticipants) && allParticipants.length > 0) {
+        const allExistingParticipants = await getAllParticipants();
+        if (Array.isArray(allExistingParticipants) && allExistingParticipants.length > 0) {
           // If we have participants, go to select screen instead
           setViewMode('select-participant');
         } else {
@@ -419,6 +426,22 @@ export default function HomeScreen() {
     ]);
   }, [isDeletingAll, displayedRecordings, viewMode, participantDetails, triggerHaptic, loadAllRecordings, unloadPlaybackSound]);
 
+
+  const handleUploadComplete = useCallback(async (response: UploadResponse) => {
+    if (response.progress?.is_complete) {
+      // Update the participant's completion status
+      const updatedDetails = {
+        ...participantDetails,
+        recordings_complete: true,
+        total_recordings: response.progress.total_recordings
+      };
+      await saveParticipantDetails(updatedDetails);
+      setParticipantDetails(updatedDetails);
+    }
+  }, [participantDetails]);
+
+
+
   const handleUploadAll = useCallback(async () => {
     if (viewMode === 'settings') {
       Alert.alert("Action Not Available", "Please switch back to the participant view to upload recordings.");
@@ -437,8 +460,7 @@ export default function HomeScreen() {
     }
 
     // Make sure we filter safely
-    const toUpload = Array.isArray(displayedRecordings) ?
-      displayedRecordings.filter(rec => !rec.uploaded) : [];
+    const toUpload = displayedRecordings.filter(rec => !rec.uploaded);
 
     if (toUpload.length === 0) {
       return Alert.alert("Up to Date", `No recordings waiting for upload for ${participantDetails.code}.`);
@@ -450,38 +472,49 @@ export default function HomeScreen() {
 
     let successCount = 0;
     let failCount = 0;
-    const uploadPromises = toUpload.map(async (recordingMeta) => {
-      try {
-        if (recordingMeta.participantCode !== participantDetails.code) {
-          console.warn(`[Upload] Skipping ${recordingMeta.id} - code mismatch.`);
-          return false;
-        }
+    let latestProgress: RecordingProgress | undefined;
 
-        // Verify file exists before upload
+    for (const recordingMeta of toUpload) {
+      try {
+        // Double-check file existence right before upload
         const fileExists = await verifyFileExists(recordingMeta.localUri);
         if (!fileExists) {
-          console.error(`[Upload] File doesn't exist: ${recordingMeta.localUri}`);
-          return false;
+          console.error(`[Upload] File missing, skipping: ${recordingMeta.localUri}`);
+          failCount++;
+          continue; // Skip to the next file
         }
 
-        const success = await uploadRecording(recordingMeta);
-        if (success) {
+        console.log(`[Upload] Uploading ${recordingMeta.id}...`);
+        const uploadResult = await uploadRecording(recordingMeta); // Expects UploadResponse | null
+
+        if (uploadResult) {
+          console.log(`[Upload] Success for ${recordingMeta.id}`);
+          successCount++;
+          // Update local metadata status
           await updateRecordingUploadedStatus(recordingMeta.id, true);
-          return true;
+          // Keep track of the latest progress returned by the backend
+          latestProgress = uploadResult.progress;
         } else {
-          return false;
+          console.error(`[Upload] Failed for ${recordingMeta.id}`);
+          failCount++;
+          // Optional: Break loop on first failure? Or continue? (Current: Continue)
         }
       } catch (error) {
-        console.error(`[Upload] Error uploading recording ${recordingMeta.id}:`, error);
-        return false;
+        console.error(`[Upload] Unexpected error for recording ${recordingMeta.id}:`, error);
+        failCount++;
       }
-    });
+    } // End of loop
 
-    const results = await Promise.all(uploadPromises);
-    successCount = results.filter(Boolean).length;
-    failCount = results.length - successCount;
-
-    setIsUploading(false);
+    // Update participant state with the *latest* progress from backend
+    if (latestProgress && participantDetails) {
+      const updatedDetails: ParticipantDetails = {
+        ...participantDetails,
+        progress: latestProgress,
+      };
+      setParticipantDetails(updatedDetails);
+      await saveParticipantDetails(updatedDetails); // Persist updated progress
+      console.log("[Upload] Updated participant progress:", latestProgress);
+    }
 
     let finalMessage = `${successCount} uploaded successfully.`;
     if (failCount > 0) {
@@ -497,38 +530,46 @@ export default function HomeScreen() {
     setIsLoading(true);
     try {
       if (!details || !isValidCode(details.code)) {
-        throw new Error("Invalid participant code format.");
+        throw new Error("Invalid participant code provided to handleSetupcomplete.");
       }
-      const savedSuccessfully = await saveParticipantDetails(details);
+
+
+      const detailsToSave: ParticipantDetails = {
+        ...details,
+        progress: details.progress ?? { total_recordings: 0, total_required: EXPECTED_TOTAL_RECORDINGS, is_complete: false }
+      };
+
+      const savedSuccessfully = await saveParticipantDetails(detailsToSave);
       if (!savedSuccessfully) {
         throw new Error("Failed to save participant details to storage.");
       }
       console.log("HomeScreen: [handleSetupComplete] Participant details saved.");
 
-      setParticipantDetails(details);
+      setParticipantDetails(detailsToSave);
       setIsSetupMode(false);
       setViewMode('participant');
       await loadAllRecordings();
       await loadParticipantCount();
-      console.log("HomeScreen: [handleSetupComplete] Setup process complete.");
+      console.log("HomeScreen: [handleSetupComplete] Setup process complete. and view updated");
     } catch (error: any) {
       console.error("HomeScreen: [handleSetupComplete] Error:", error);
       Alert.alert("Error", `Failed to finalize setup: ${error.message || 'Unknown error'}`);
       setIsLoading(false);
     }
-  }, [loadAllRecordings, loadParticipantCount]);
+  }, [loadAllRecordings, loadParticipantCount, handleUploadComplete]);
 
-  const handleManageRecordings = useCallback(() => {
-    setViewMode('participant-recordings');
-  }, []);
+
 
   const handleParticipantSelected = useCallback((participant: ParticipantDetails | null) => {
     if (participant) {
       setParticipantDetails(participant);
       setIsSetupMode(false);
       setViewMode('participant');
+      loadAllRecordings()
+    } else {
+      setViewMode('select-participant')
     }
-  }, []);
+  }, [loadAllRecordings]);
 
   const handleCreateNewParticipant = useCallback(() => {
     setViewMode('create-participant');
@@ -541,20 +582,7 @@ export default function HomeScreen() {
     triggerHaptic();
   }, [triggerHaptic]);
 
-  // useEffect(() => {
-  //   const checkWelcomeScreen = async () => {
-  //     try {
-  //       const welcomeSeen = await AsyncStorage.getItem(WELCOME_SEEN_KEY);
-  //       setHasSeenWelcome(welcomeSeen === 'true');
-  //     } catch (e) {
-  //       console.error('Error checking welcome screen state:', e);
-  //     } finally {
-  //       setIsCheckingWelcome(false);
-  //     }
-  //   };
 
-  //   checkWelcomeScreen();
-  // }, []);
 
   // Redirect if welcome hasn't been seen
   // if (!isCheckingWelcome && !hasSeenWelcome) {
@@ -566,26 +594,79 @@ export default function HomeScreen() {
   useEffect(() => {
 
     let title = "Twi Speech Recorder";
-    if (!isSetupMode && participantDetails?.code) {
-      title = viewMode === 'settings'
-        ? `Settings (${participantDetails.code})`
-        : `Recordings (${participantDetails.code})`;
+    if (viewMode === 'settings') {
+      title = "Settings & Management";
     } else if (isSetupMode) {
-      if (viewMode === 'select-participant') {
-        title = "Select Participant";
-      } else if (viewMode === 'create-participant') {
-        title = "New Participant";
-      } else {
-        title = "Participant Setup";
-      }
+      if (viewMode === 'select-participant') title = "Select Participant";
+      else if (viewMode === 'create-participant') title = "New Participant";
+      else if (viewMode === 'edit-participant') title = `Edit: ${participantDetails?.code ?? 'Participant'}`;
+      else title = "Participant Setup";
+    } else if (participantDetails?.code) {
+      title = `Recordings (${participantDetails.code})`;
     }
     navigation.setOptions({ title });
   }, [navigation, participantDetails, viewMode, isSetupMode]);
+
+  const renderProgress = useCallback((recordingsForParticipant: RecordingMetadata[]) => {
+    // Only show in participant view and if details exist
+    if (viewMode !== 'participant' || !participantDetails?.progress) return null;
+
+    const localTotalRecordings = recordingsForParticipant.length;
+
+    const totalRequired = participantDetails.progress?.total_required ?? EXPECTED_TOTAL_RECORDINGS;
+
+    const isLocallyComplete = totalRequired > 0 && localTotalRecordings >= totalRequired;
+
+    // Prevent division by zero, default to 0% if total_required is missing or zero
+    const percentage = totalRequired > 0
+      ? Math.min(100, Math.round((localTotalRecordings / totalRequired) * 100))
+      : 0;
+    console.log(`Percentage: ${percentage}%`);
+
+    return (
+      <View
+      // className="bg-white dark:bg-neutral-800 rounded-lg p-4 mb-4 mx-4 border border-neutral-200 dark:border-neutral-700 shadow-sm"
+      >
+        {/* <Text style={{ color: textColor }} className="text-lg font-semibold mb-2 text-center">
+          Recording Progress
+        </Text> */}
+        <View className="flex-row justify-between mb-2 px-1">
+          <Text style={{ color: secondaryTextColor }} className="text-sm">
+            {localTotalRecordings} / {totalRequired} Prompts Recorded
+          </Text>
+          <Text style={{ color: isLocallyComplete ? successColor : primaryColor }} className="text-sm font-bold">
+            {percentage}%
+          </Text>
+        </View>
+        <View className="h-2.5 bg-neutral-200 dark:bg-neutral-700 rounded-full overflow-hidden">
+          <View
+            className={`h-full rounded-full ${isLocallyComplete ? 'bg-success' : 'bg-primary dark:bg-primary-dark'}`}
+            style={{ width: `${percentage}%` }}
+          />
+        </View>
+        {isLocallyComplete && (
+          <View className="flex-row items-center justify-center mt-2.5">
+            <MaterialCommunityIcons name="check-decagram" size={18} color={successColor} />
+            <Text style={{ color: successColor }} className="ml-1.5 text-center font-semibold">
+              All required prompts recorded!
+            </Text>
+          </View>
+        )}
+
+        {participantDetails.progress?.is_complete && !isLocallyComplete && (
+          <Text style={{ color: warningColor }} className="text-xs text-center mt-1 italic">
+            (Backend reports completion, awaiting sync/upload)
+          </Text>
+        )}
+      </View>
+    );
+  }, [viewMode, participantDetails, textColor, secondaryTextColor, primaryColor, successColor, warningColor, EXPECTED_TOTAL_RECORDINGS]);
 
   useEffect(() => {
     loadInitialData();
     return () => { unloadPlaybackSound(); };
   }, [loadInitialData, unloadPlaybackSound]);
+
 
   useFocusEffect(
     useCallback(() => {
@@ -618,6 +699,7 @@ export default function HomeScreen() {
         setHasSeenWelcome(welcomeSeen === 'true');
       } catch (e) {
         console.error('Error checking welcome screen state:', e);
+        setHasSeenWelcome(false);
       } finally {
         setIsCheckingWelcome(false);
       }
@@ -626,17 +708,14 @@ export default function HomeScreen() {
     checkWelcomeScreen();
   }, []);
 
-  // All your other useEffects should be here
-
-  // Now, AFTER defining ALL hooks, we can conditionally render
 
 
   // --- Memos ---
   const pendingToUploadCount = useMemo(() => {
     if (viewMode !== 'participant' || !participantDetails) return 0;
-    return Array.isArray(displayedRecordings) ?
-      displayedRecordings.filter(rec => !rec.uploaded).length : 0;
-  }, [displayedRecordings, viewMode, participantDetails]);
+    // Filter recordings for the current participant that are not uploaded
+    return displayedRecordings.filter(rec => !rec.uploaded).length;
+  }, [displayedRecordings, viewMode, participantDetails]); // Depends on currently displayed recordings
 
   const canUpload = useMemo(() => (
     !isUploading &&
@@ -646,13 +725,10 @@ export default function HomeScreen() {
   ), [isUploading, pendingToUploadCount, networkAvailable, viewMode]);
 
   const canDeleteAllDisplayed = useMemo(() => (
-    Array.isArray(displayedRecordings) &&
-    displayedRecordings.length > 0 &&
-    !isDeletingAll &&
-    !isUploading
+    displayedRecordings.length > 0 && !isDeletingAll && !isUploading
   ), [displayedRecordings, isDeletingAll, isUploading]);
 
-  if (isCheckingWelcome) {
+  if (isCheckingWelcome || isLoading) {
     return (
       <ThemedSafeAreaView className="flex-1 justify-center items-center">
         <ActivityIndicator size="large" color={primaryColor} />
@@ -666,6 +742,8 @@ export default function HomeScreen() {
     // AsyncStorage.setItem(PARTICIPANT_DETAILS_KEY, '')
     router.replace('/welcome');
   }
+
+  // Dependencies for the progress display
 
   // --- Render Methods ---
   const renderSettingsScreen = () => {
@@ -796,12 +874,7 @@ export default function HomeScreen() {
   // --- Main Render Logic ---
   return (
     <ThemedSafeAreaView className="flex-1">
-      {isLoading ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color={primaryColor} />
-          <Text style={[styles.loadingText, { color: textColor }]}>Loading Data...</Text>
-        </View>
-      ) : isSetupMode ? (
+      {isSetupMode ? (
         viewMode === 'select-participant' ? (
           <ParticipantSelector
             currentParticipant={participantDetails}
@@ -819,10 +892,13 @@ export default function HomeScreen() {
             }}
           />
         ) : viewMode === 'edit-participant' ? (
-          <SetupScreenContent onSetupComplete={handleSetupComplete} initialDetails={participantDetails} onCancel={() => {
-            setViewMode('participant')
-            setIsSetupMode(false)
-          }} />
+          <SetupScreenContent
+            onSetupComplete={handleSetupComplete}
+            initialDetails={participantDetails}
+            onCancel={() => {
+              setViewMode('participant')
+              setIsSetupMode(false)
+            }} />
         ) : null
       ) : viewMode === 'settings' ? (
         renderSettingsScreen()
@@ -836,15 +912,13 @@ export default function HomeScreen() {
           )}
 
           <FlatList
-            data={displayedRecordings || []}
+            data={displayedRecordings}
             keyExtractor={(item) => item.id || String(Math.random())}
             extraData={[
               playbackUiVersion, // Use the version counter for minimal re-renders
               isDeletingId,
               isDeletingAll,
-              viewMode,
-              pendingToUploadCount,
-              allRecordings.length
+              participantDetails?.progress,
             ]}
             renderItem={({ item }) => (
               <RecordingListItem
@@ -853,119 +927,105 @@ export default function HomeScreen() {
                 onDelete={() => handleDeleteRecording(item.id, item.promptId)}
                 isPlaying={playbackState.currentUri === item.localUri && playbackState.status === 'playing'}
                 isDeleting={isDeletingId === item.id || isDeletingAll}
-                showParticipantCode={viewMode === 'participant' ? true : false}
+                showParticipantCode={false /*viewMode === 'participant' ? true : false*/}
               />
             )}
             ListHeaderComponent={
               <View className="px-4 pt-4 pb-2">
-                <View className="flex-row items-center justify-end mb-4 px-1">
-                  {viewMode !== 'participant' && (
-                    <Button
-                      title=""
-                      icon="arrow-left-circle-outline"
-                      iconSize={26}
-                      onPress={() => setViewMode('participant')}
-                      className="p-1"
-                      iconColor={iconColor || undefined}
-                    />
-                  )}
-
-
-
-
-                  {/* <Text
+                {/* Top Bar with Cog */}
+                <View className="flex-row items-center justify-between mb-4 px-1">
+                  {/* Placeholder to balance the cog icon */}
+                  <View style={{ width: 34 }} />
+                  {/* Participant Code Display (moved here for better centering) */}
+                  <Text
                     className="text-xl font-semibold text-neutral-800 dark:text-neutral-100 text-center flex-1 mx-2"
                     numberOfLines={1}
                     style={{ color: textColor }}
                   >
-                    {viewMode === 'participant' ? (participantDetails?.code ?? 'Session') : 'Settings / All'}
-                  </Text> */}
-
-
+                    {participantDetails?.code ?? 'Loading...'}
+                  </Text>
+                  <Button
+                    title=""
+                    icon="cog-outline"
+                    iconSize={26}
+                    onPress={goToSettings}
+                    className="p-1"
+                    iconColor={iconColor || undefined}
+                  />
                 </View>
 
-                {viewMode === 'participant' && participantDetails && (
-                  <View className="mb-3">
-                    <View className="flex-row items-center justify-between mb-1">
-                      <Text
-                        className="text-xs font-medium text-neutral-500 dark:text-neutral-400"
-                        style={{ color: secondaryTextColor }}
-                      >
-                        Current Participant:
-                      </Text>
-                      {viewMode === 'participant' ? (
-                        <Button
-                          title=""
-                          icon="cog-outline"
-                          iconSize={26}
-                          onPress={goToSettings}
-                          className="p-1 right-0"
-                          iconColor={iconColor || undefined}
-                        />
-                      ) : (
-                        <View style={{ width: 34 }} />
-                      )}
-                    </View>
 
-                    <View className="flex-row items-center">
-                      <View className="flex-1">
-                        <Text className="text-base font-semibold items-center justify-center" style={{ color: textColor }}>
-                          {participantDetails?.code || "Unknown"} <Button
-                            title=""
-                            icon="account-edit-outline"
-                            iconColor={primaryColor || undefined}
-                            iconSize={20}
-                            onPress={() => {
-                              // Switch to setup mode with current details for editing
-                              setIsSetupMode(true);
-                              setViewMode('edit-participant'); // Reuse the create view but with initialDetails
-                            }}
-                            className="py-0.5 px-2 flex-row items-center bg-transparent"
-                            textClassName="text-xs text-primary dark:text-primary-light ml-1"
-                          />
-                        </Text>
-                        <Text className="text-xs" style={{ color: secondaryTextColor }}>
-                          {[
-                            participantDetails?.dialect,
-                            participantDetails?.age_range,
-                            participantDetails?.gender
-                          ].filter(Boolean).join(' • ') || 'No additional details provided'}
-                        </Text>
-                      </View>
+                {participantDetails && (
+                  <View className="mb-3 p-4 bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700 shadow-sm">
 
-                      <Text className="text-xs py-1 px-2 rounded-full bg-neutral-100 dark:bg-neutral-700" style={{ color: secondaryTextColor }}>
-                        {participantCount} {participantCount === 1 ? 'Participant' : 'Participants'}
+                    <View className="flex-row items-center justify-between mb-1.5">
+                      <Text className="text-sm font-medium text-neutral-500 dark:text-neutral-400">
+                        Participant Details:
                       </Text>
+                      <Button
+                        title="Edit"
+                        icon="account-edit-outline"
+                        iconColor={primaryColor || undefined}
+                        iconSize={16}
+                        onPress={() => {
+                          setIsSetupMode(true);
+                          setViewMode('edit-participant');
+                        }}
+                        className="py-0.5 px-2 flex-row items-center bg-primary/10 dark:bg-primary/20 rounded-md"
+                        textClassName="text-xs text-primary dark:text-primary-light ml-1 font-medium"
+                      />
                     </View>
+                    <Text className="text-sm" style={{ color: secondaryTextColor }}>
+                      {[
+                        participantDetails.dialect && `Dialect: ${participantDetails.dialect}`,
+                        participantDetails.age_range && `Age: ${participantDetails.age_range}`,
+                        participantDetails.gender && `Gender: ${participantDetails.gender}`
+                      ].filter(Boolean).join('  •  ') || 'No optional details provided'}
+                    </Text>
+                    <View className="mt-4">
+
+                      {renderProgress(displayedRecordings)}
+                    </View>cls
                   </View>
                 )}
 
-                {viewMode === 'participant' && (
-                  <Button
-                    title={`${displayedRecordings.length > 0 ? 'Continue Recording' : 'Start Recording'}`}
-                    icon="microphone-plus"
-                    iconColor='#F5f5f0'
-                    onPress={() => router.push('/record')}
-                    className="bg-success dark:bg-success-dark w-full flex-row items-center justify-center py-3.5 rounded-xl shadow-md my-3"
-                    textClassName="text-white text-lg font-semibold ml-2 dark:text-gray-100"
-                    disabled={isDeletingAll || isUploading}
-                    disabledClassName="bg-neutral-400 dark:bg-neutral-600 opacity-70"
-                  />
+                {/* Progress Bar */}
+                {/* {renderProgress(displayedRecordings)} */}
+
+                <Button
+                  title={displayedRecordings.length > 0 ? 'Continue Recording' : 'Start Recording'}
+                  icon="microphone-plus"
+                  iconColor='#F5f5f0'
+                  onPress={() => router.push('/record')}
+                  // Disable if recordings are complete for this participant
+                  disabled={isDeletingAll || isUploading || participantDetails?.progress?.is_complete}
+                  className={`
+                      w-full flex-row items-center justify-center py-3.5 rounded-xl shadow-md my-3
+                        ${participantDetails?.progress?.is_complete
+                      ? 'bg-neutral-400 dark:bg-neutral-600 opacity-70'
+                      : 'bg-success dark:bg-success-dark'
+                    }
+                                   `}
+                  textClassName="text-white text-lg font-semibold ml-2 dark:text-gray-100"
+                  disabledClassName="bg-neutral-400 dark:bg-neutral-600 opacity-70" // Explicit disabled style
+                />
+                {participantDetails?.progress?.is_complete && (
+                  <Text className="text-xs text-center text-neutral-500 dark:text-neutral-400 -mt-2 mb-3">
+                    All recordings completed.
+                  </Text>
                 )}
 
+                {/* Recorded Items Header */}
                 <View className="flex-row justify-between items-center mt-3 mb-1">
-                  <Text
-                    className="text-lg font-semibold text-neutral-700 dark:text-neutral-300"
-                    style={{ color: textColor }}
-                  >
-                    {viewMode === 'settings' ? 'All Device Recordings' : 'Recorded Items'} ({displayedRecordings?.length || 0})
+                  <Text className="text-lg font-semibold" style={{ color: textColor }}>
+                    Recorded Items ({displayedRecordings.length})
                   </Text>
-
+                  {/* Delete All *Participant's* Recordings Button */}
                   <Button
-                    title={viewMode === 'settings' ? "Delete User's" : "Delete All"}
+                    title="Delete All"
                     icon={isDeletingAll ? undefined : "delete-sweep-outline"}
-                    onPress={handleDeleteAll}
-                    disabled={!canDeleteAllDisplayed}
+                    onPress={handleDeleteAll} // Will trigger participant-specific delete in this view
+                    disabled={displayedRecordings.length === 0 || isDeletingAll || isUploading}
                     isLoading={isDeletingAll}
                     className="bg-danger/10 dark:bg-danger/25 px-3 py-1.5 rounded-lg flex-row items-center justify-center"
                     textClassName="text-danger dark:text-danger-light text-sm font-medium ml-1"
@@ -980,13 +1040,11 @@ export default function HomeScreen() {
               <View style={styles.centerContainer} className="mt-10">
                 <MaterialCommunityIcons name="playlist-music-outline" size={60} color={iconColor || '#000'} />
                 <Text style={[styles.emptyText, { color: textColor }]}>
-                  {viewMode === 'participant' ? 'No recordings for this participant yet.' : 'No recordings found on this device.'}
+                  No recordings yet.
                 </Text>
-                {viewMode === 'participant' && (
-                  <Text style={[styles.emptySubText, { color: secondaryTextColor }]}>
-                    Press "Start / Continue Recording" above.
-                  </Text>
-                )}
+                <Text style={[styles.emptySubText, { color: secondaryTextColor }]}>
+                  Press "Start Recording" above to begin.
+                </Text>
               </View>
             }
             refreshControl={
@@ -999,35 +1057,34 @@ export default function HomeScreen() {
               />
             }
             className="flex-1 px-2"
-            contentContainerStyle={{ paddingBottom: viewMode === 'participant' ? 120 : 20 }}
+            contentContainerStyle={{ paddingBottom: 120 }} // Ensure space for upload button
           />
 
-          {viewMode === 'participant' && (
-            <View className="absolute bottom-0 left-0 right-0 p-4 border-t border-neutral-200 bg-white/95 shadow-lg dark:bg-neutral-800/95 dark:border-neutral-700">
-              <View className="flex-row justify-between items-center mb-2.5">
-                <Text className="text-base text-neutral-700 dark:text-neutral-200" style={{ color: textColor }}>
-                  Pending Upload: <Text className="font-bold">{pendingToUploadCount}</Text>
+          {/* Upload Button Area (Only in Participant View) */}
+          <View className="absolute bottom-0 left-0 right-0 p-4 border-t border-neutral-200 bg-white/95 shadow-lg dark:bg-neutral-800/95 dark:border-neutral-700">
+            <View className="flex-row justify-between items-center mb-2.5">
+              <Text className="text-base" style={{ color: textColor }}>
+                Pending Upload: <Text className="font-bold">{pendingToUploadCount}</Text>
+              </Text>
+              <View className="flex-row items-center">
+                <View className={`w-2.5 h-2.5 rounded-full mr-1.5 ${networkAvailable ? "bg-success" : "bg-danger"}`} />
+                <Text className={`text-xs font-medium ${networkAvailable ? "text-success-dark dark:text-success-light" : "text-danger-dark dark:text-danger-light"}`}>
+                  {networkAvailable ? 'Online' : 'Offline'}
                 </Text>
-                <View className="flex-row items-center">
-                  <View className={`w-2.5 h-2.5 rounded-full mr-1.5 ${networkAvailable ? "bg-success" : "bg-danger"}`} />
-                  <Text className={`text-xs font-medium ${networkAvailable ? "text-success-dark dark:text-success-light" : "text-danger-dark dark:text-danger-light"}`}>
-                    {networkAvailable ? 'Online' : 'Offline'}
-                  </Text>
-                </View>
               </View>
-              <Button
-                title={isUploading ? "Uploading..." : `Upload All (${pendingToUploadCount})`}
-                icon={isUploading ? undefined : "cloud-upload-outline"}
-                onPress={handleUploadAll}
-                disabled={!canUpload}
-                isLoading={isUploading}
-                className="bg-primary dark:bg-primary-dark w-full flex-row items-center justify-center py-3 rounded-lg"
-                textClassName="text-white text-lg font-semibold ml-2 dark:text-neutral-100"
-                iconColor="white"
-                disabledClassName="bg-primary-light dark:bg-primary/50 opacity-70"
-              />
             </View>
-          )}
+            <Button
+              title={isUploading ? "Uploading..." : `Upload Pending (${pendingToUploadCount})`}
+              icon={isUploading ? undefined : "cloud-upload-outline"}
+              onPress={handleUploadAll}
+              disabled={!canUpload}
+              isLoading={isUploading}
+              className="bg-primary dark:bg-primary-dark w-full flex-row items-center justify-center py-3 rounded-lg"
+              textClassName="text-white text-lg font-semibold ml-2 dark:text-neutral-100"
+              iconColor="white"
+              disabledClassName="bg-primary-light dark:bg-primary/50 opacity-70"
+            />
+          </View>
         </>
       )}
     </ThemedSafeAreaView>

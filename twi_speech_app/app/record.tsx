@@ -162,45 +162,6 @@ export default function RecordScreen() {
   }
 
   // --- Callbacks (remain the same, except promptForNextAction) ---
-  const showConfirmationModal = useCallback(() => {
-    showModal(
-      <ConfirmationModalContent
-        title="Section Complete!"
-        message={`You have completed Section ${currentSectionIndex + 1}: "${RECORDING_SECTIONS[currentSectionIndex]?.title || 'Current Section'}".\n\nContinue to the next section or go back home?`}
-        iconName="check-circle-outline"
-        options={[
-          {
-            text: "Go Back Home",
-            style: "secondary",
-            icon: "arrow-left",
-            onPress: () => {
-              hideModal();
-              router.back();
-            },
-          },
-          {
-            text: "Continue",
-            style: "primary",
-            icon: "arrow-right",
-            iconPosition: "right",
-            onPress: () => {
-              hideModal();
-              const nextSectionIndex = currentSectionIndex + 1;
-              if (nextSectionIndex < RECORDING_SECTIONS.length) {
-                setCurrentSectionIndex(nextSectionIndex);
-                setCurrentPromptInSectionIndex(0);
-                setDisplayMode('intro');
-                setCurrentPromptRecordingUri(null);
-                setCurrentPromptRecordingDuration(undefined);
-              } else {
-                setIsSessionComplete(true);
-              }
-            },
-          },
-        ]}
-      />
-    );
-  }, [currentSectionIndex, hideModal, router, showModal]);
 
   const triggerHaptic = useCallback((type: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) => {
     Haptics.impactAsync(type).catch(console.error);
@@ -483,11 +444,12 @@ export default function RecordScreen() {
       setCurrentPromptInSectionIndex(nextPromptIndex);
       setCurrentPromptRecordingUri(null);
       setCurrentPromptRecordingDuration(undefined);
-      if (nextPromptIndex < currentSectionPrompts.length) {
-        const nextPromptId = currentSection?.prompts[nextPromptIndex]?.id;
-        if (nextPromptId && participantDetails?.code) {
-          loadRecordingForPrompt(nextPromptId, participantDetails.code);
-        }
+      const nextPromptId = currentSection?.prompts[nextPromptIndex]?.id;
+      if (nextPromptId && participantDetails?.code) {
+        loadRecordingForPrompt(nextPromptId, participantDetails.code);
+      } else {
+        setCurrentPromptRecordingUri(null);
+        setCurrentPromptRecordingDuration(undefined);
       }
     }
   }, [
@@ -497,16 +459,16 @@ export default function RecordScreen() {
     participantDetails, loadRecordingForPrompt
   ]);
 
-  useEffect(() => {
-    isMounted.current = true;
+  // useEffect(() => {
+  //   isMounted.current = true;
 
-    return () => {
-      isMounted.current = false;
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
+  //   return () => {
+  //     isMounted.current = false;
+  //     if (timeoutRef.current) {
+  //       clearTimeout(timeoutRef.current);
+  //     }
+  //   };
+  // }, []);
 
   // const handleModalError = useCallback((error: Error) => {
   //   console.error("Modal Error:", error);
@@ -517,6 +479,7 @@ export default function RecordScreen() {
     if (!canGoPrevious) return;
     triggerHaptic();
     unloadPlaybackSound();
+
     if (currentPromptInSectionIndex > 0) {
       const prevPromptIndex = currentPromptInSectionIndex - 1;
       setCurrentPromptInSectionIndex(prevPromptIndex);
@@ -549,6 +512,8 @@ export default function RecordScreen() {
   // --- Initialization (remains the same) ---
   const initializeScreen = useCallback(async (isActive: boolean) => {
     console.log("RecordScreen: Initializing screen...");
+    setIsLoading(true);
+    setInitializationError(null);
     try {
       // Load participant details first
       const details = await getParticipantDetails();
@@ -562,6 +527,8 @@ export default function RecordScreen() {
           "Please set up participant details before recording.",
           [{ text: "OK", onPress: () => router.replace("/") }]
         );
+        setInitializationError("Participant setup required."); // Set error state
+        setIsLoading(false);
         return;
       }
 
@@ -574,8 +541,16 @@ export default function RecordScreen() {
       setCurrentPromptInSectionIndex(promptIndex);
 
       // Set the correct display mode
-      setDisplayMode(sectionIndex && promptIndex === 0 ? 'intro' : 'prompt');
+      setDisplayMode(promptIndex === 0 && sectionIndex < RECORDING_SECTIONS.length ? 'intro' : 'prompt');
 
+      if (displayMode === 'prompt') {
+        const startPrompt = RECORDING_SECTIONS[sectionIndex]?.prompts[promptIndex];
+        if (startPrompt?.id) {
+          loadRecordingForPrompt(startPrompt.id, details.code);
+        }
+      }
+
+      setIsSessionComplete(false);
       setIsLoading(false);
 
     } catch (error) {
@@ -585,16 +560,17 @@ export default function RecordScreen() {
         setIsLoading(false);
       }
     }
-  }, [router]);
+  }, [router, loadRecordingForPrompt]);
 
   // --- Effects (remain the same) ---
   useEffect(() => {
+    // Mounted ref
     isMounted.current = true;
-    Audio.setAudioModeAsync({
-      allowsRecordingIOS: false, playsInSilentModeIOS: true, interruptionModeIOS: InterruptionModeIOS.DoNotMix,
-      interruptionModeAndroid: InterruptionModeAndroid.DoNotMix, shouldDuckAndroid: true, playThroughEarpieceAndroid: false, staysActiveInBackground: false,
-    }).catch(e => console.error("Failed to set initial audio mode for playback:", e));
-    return () => { isMounted.current = false; console.log("RecordScreen: Unmounting, unloading playback sound."); unloadPlaybackSound(); };
+    return () => {
+      isMounted.current = false;
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      unloadPlaybackSound(); // Ensure sound is unloaded on unmount
+    };
   }, [unloadPlaybackSound]);
 
   useEffect(() => {
@@ -606,55 +582,62 @@ export default function RecordScreen() {
   }, [navigation, displayMode, currentSection, currentPrompt, globalPromptIndex, totalPrompts, isSessionComplete]);
 
   useEffect(() => {
-    console.log(`RecordScreen: Prompt or Mode changed. Section: ${currentSectionIndex}, Prompt Idx: ${currentPromptInSectionIndex}, Mode: ${displayMode}`);
+    console.log(`RecordScreen: Prompt or Mode changed. Section: ${currentSectionIndex}, P: ${currentPromptInSectionIndex}, M: ${displayMode}`);
     unloadPlaybackSound();
     if (displayMode === 'prompt' && currentPrompt?.id && participantDetails?.code) {
       loadRecordingForPrompt(currentPrompt.id, participantDetails.code);
-    } else { setCurrentPromptRecordingUri(null); setCurrentPromptRecordingDuration(undefined); }
+    } else {
+      setCurrentPromptRecordingUri(null); setCurrentPromptRecordingDuration(undefined);
+    }
   }, [currentPromptInSectionIndex, currentSectionIndex, displayMode, participantDetails, loadRecordingForPrompt, currentPrompt, unloadPlaybackSound]);
 
-  useEffect(() => { if (recorderError) { Alert.alert('Recorder Error', recorderError); } }, [recorderError]);
+  useEffect(() => {
+    if (recorderError) {
+      Alert.alert('Recorder Error', recorderError);
+    }
+  }, [recorderError]);
 
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
       console.log("RecordScreen: useFocusEffect - Running Initialization");
-
-      // Clear any existing timeout
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-
-      // Reset only necessary states
-      const resetStates = () => {
-        if (isActive) {
-          // setIsConfirmationModalVisible(false);
-          setShowConfetti(false);
-          unloadPlaybackSound();
-          setIsLoading(true);
-          setInitializationError(null);
-          setParticipantDetails(null);
-          setCurrentPromptRecordingUri(null);
-          setCurrentPromptRecordingDuration(undefined);
-          playbackStateRef.status = 'idle';
-          playbackStateRef.error = null;
-          playbackStateRef.currentUri = null;
-          playbackStateRef.sound = null;
-          triggerPlaybackUiUpdate();
-        }
-      };
-
-      resetStates();
       initializeScreen(isActive);
 
+      // Clear any existing timeout
+      // if (timeoutRef.current) {
+      //   clearTimeout(timeoutRef.current);
+      // }
+
+      // Reset only necessary states
+      // const resetStates = () => {
+      //   if (isActive) {
+      //     // setIsConfirmationModalVisible(false);
+      //     setShowConfetti(false);
+      //     unloadPlaybackSound();
+      //     setIsLoading(true);
+      //     setInitializationError(null);
+      //     setParticipantDetails(null);
+      //     setCurrentPromptRecordingUri(null);
+      //     setCurrentPromptRecordingDuration(undefined);
+      //     playbackStateRef.status = 'idle';
+      //     playbackStateRef.error = null;
+      //     playbackStateRef.currentUri = null;
+      //     playbackStateRef.sound = null;
+      //     triggerPlaybackUiUpdate();
+      //   }
+      // };
+
+      // resetStates();
+      // initializeScreen(isActive);
+
       return () => {
-        console.log("RecordScreen: useFocusEffect - Cleanup");
+        // console.log("RecordScreen: useFocusEffect - Cleanup");
         isActive = false;
-        if (timeoutRef.current) {
-          clearTimeout(timeoutRef.current);
-        }
+        // if (timeoutRef.current) {
+        //   clearTimeout(timeoutRef.current);
+        // }
         // Don't reset section and prompt indices on cleanup
-        resetStates();
+        // resetStates();
       };
     }, [initializeScreen])
   );
@@ -691,7 +674,7 @@ export default function RecordScreen() {
         <Button icon="arrow-left" onPress={() => router.back()} title="" className="p-2" iconSize={28} iconColor={iconColor} />
         <Text className="text-center font-semibold text-neutral-600 dark:text-neutral-300">
           {/* Dynamic title setting seems to be missing, using navigation options instead is good */}
-          {navigation.getState().routes.find(r => r.name === 'record')?.params?.title || 'Recording'}
+          {navigation?.getState().routes.find(r => r.name === 'record')?.params?.title || 'Recording'}
         </Text>
         <View style={{ width: 40 }} />
       </View>
@@ -714,13 +697,21 @@ export default function RecordScreen() {
         ) : isSessionComplete ? (
           <View className="p-6 items-center">
             <MaterialCommunityIcons name="party-popper" size={70} color="#10B981" />
-            <Text className="text-2xl font-bold text-neutral-800 mt-4 text-center dark:text-neutral-100">Session Complete!</Text>
-            <Text className="text-lg text-neutral-600 mt-2 text-center dark:text-neutral-400">You can now go back to review and upload.</Text>
+            <Text className="text-2xl font-bold text-neutral-800 mt-4 text-center dark:text-neutral-100">Recording Session Complete!</Text>
+            <Text className="text-lg text-neutral-600 mt-2 text-center dark:text-neutral-400">All prompts recorded. Go back home to review and upload.</Text>
             <Button title="Back to Home" icon="home-outline" onPress={() => router.back()} className="bg-primary dark:bg-primary-dark mt-8 px-8 py-3 rounded-lg shadow flex flex-row items-center justify-center" textClassName="text-white text-lg font-semibold ml-2" iconColor="white" />
           </View>
         ) : currentPrompt ? (
           <ScrollView className="w-full" contentContainerStyle={styles.scrollViewContent} showsVerticalScrollIndicator={false}>
-            <PromptDisplay prompt={currentPrompt} currentNumber={globalPromptIndex + 1} totalNumber={totalPrompts} containerClassName="w-full items-center px-4 py-6" promptTextClassName="text-3xl md:text-4xl text-neutral-900 dark:text-neutral-100 leading-tight my-3 text-center font-medium" infoTextClassName="text-center text-sm text-neutral-500 dark:text-neutral-400 mb-1 font-medium" typeTextClassName="text-center text-xs font-bold uppercase tracking-wider text-primary dark:text-primary-light mb-3" meaningTextClassName="text-center text-base italic text-neutral-600 dark:text-neutral-400 mt-2" />
+            <PromptDisplay
+              prompt={currentPrompt}
+              currentNumber={globalPromptIndex + 1}
+              totalNumber={totalPrompts}
+              containerClassName="w-full items-center px-4 py-6"
+              promptTextClassName="text-3xl md:text-4xl text-neutral-900 dark:text-neutral-100 leading-tight my-3 text-center font-medium"
+              infoTextClassName="text-center text-sm text-neutral-500 dark:text-neutral-400 mb-1 font-medium"
+              typeTextClassName="text-center text-xs font-bold uppercase tracking-wider text-primary dark:text-primary-light mb-3"
+              meaningTextClassName="text-center text-base italic text-neutral-600 dark:text-neutral-400 mt-2" />
           </ScrollView>
         ) : (
           <ActivityIndicator size="small" color={primaryColor} />
@@ -782,6 +773,10 @@ export default function RecordScreen() {
               setDisplayMode('intro');
               setCurrentPromptRecordingUri(null);
               setCurrentPromptRecordingDuration(undefined);
+            } else {
+              // This case should ideally be handled by the isSessionComplete logic earlier
+              console.warn("Continue pressed on the last section, should have been caught earlier.");
+              setIsSessionComplete(true); // Ensure session complete state is set
             }
           }}
           onGoBack={() => {

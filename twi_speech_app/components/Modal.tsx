@@ -23,29 +23,30 @@ export const Modal: React.FC<ModalProps> = ({
   const backgroundColor = useThemeColor({}, 'background');
   const iconColor = useThemeColor({}, 'text');
 
+  const altClassName = `absolute mb-3 p-3  rounded-lg justify-center  h-full w-${SCREEN_WIDTH * 0.8}`;
   return (
-    <RNModal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    // statusBarTranslucent={Platform.OS === 'android'}
-    >
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0, 0, 0, 0.5)', padding: 20 }}>
-        <ThemedView style={styles.content}>
-          {showCloseButton && (
-            <Button
-              title=""
-              icon="close"
-              onPress={onClose}
-              className="absolute bg-neutral-300 dark:bg-neutral-800 mb-3 p-3 top-0 right-0 rounded-lg items-center justify-center flex m-4"
-              textClassName="text-neutral-800 dark:text-neutral-100 font-semibold"
-            />
-          )}
-          {children}
-        </ThemedView>
-      </View>
-    </RNModal>
+    // <RNModal
+    //   visible={visible}
+    //   transparent
+    //   animationType="slide"
+    //   onRequestClose={onClose}
+    // // statusBarTranslucent={Platform.OS === 'android'}
+    // >
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0, 0, 0, 0.5)', padding: 20 }} className={altClassName}>
+      <ThemedView style={styles.content}>
+        {showCloseButton && (
+          <Button
+            title=""
+            icon="close"
+            onPress={onClose}
+            className="absolute bg-neutral-300 dark:bg-neutral-800 mb-3 p-3 top-0 right-0 rounded-lg items-center justify-center flex m-4"
+            textClassName="text-neutral-800 dark:text-neutral-100 font-semibold"
+          />
+        )}
+        {children}
+      </ThemedView>
+    </View>
+    // </RNModal>
   );
 };
 

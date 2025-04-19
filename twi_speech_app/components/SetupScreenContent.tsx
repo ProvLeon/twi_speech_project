@@ -7,6 +7,7 @@ import { isValidCode } from '@/lib/utils';
 import { ThemedView } from './ThemedView';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { getAllParticipants } from '@/lib/storage';
+import { EXPECTED_TOTAL_RECORDINGS } from '@/constants/script';
 
 interface SetupScreenContentProps {
   onSetupComplete: (details: ParticipantDetails) => Promise<void>;
@@ -82,10 +83,8 @@ export default function SetupScreenContent({
     if (!isValidCode(code)) {
       setCodeError('Code format: TWI_Speaker_ followed by exactly 3 digits');
       isValid = false;
-    }
-
-    // When creating new participant, check for duplicate codes
-    if (isNewParticipant && isValidCode(code) && existingCodes.includes(code)) {
+    } else if (isNewParticipant && existingCodes.includes(code.trim())) {
+      // Check trimmed code for uniqueness
       setCodeError('This participant code already exists');
       isValid = false;
     }
@@ -122,6 +121,12 @@ export default function SetupScreenContent({
       dialect: dialect.trim() || undefined,
       age_range: ageRange.trim() || undefined,
       gender: gender.trim() || undefined,
+      // Use existing progress if editing, otherwise initialize for new participant
+      progress: initialDetails?.progress ?? {
+        total_recordings: 0,
+        total_required: EXPECTED_TOTAL_RECORDINGS, // Use the constant
+        is_complete: false,
+      },
     };
 
     try {
@@ -129,7 +134,7 @@ export default function SetupScreenContent({
     } catch (error: any) {
       console.error("[SetupScreenContent] Error during setup save callback:", error);
       Alert.alert('Save Error', `Could not save participant details. ${error.message || 'Unknown error'}`);
-      setIsLoading(false);
+      // setIsLoading(false);
     }
   };
 

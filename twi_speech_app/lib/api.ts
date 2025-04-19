@@ -1,15 +1,15 @@
 import { UPLOAD_AUDIO_ENDPOINT } from '@/constants/api';
-import { RecordingMetadata } from '@/types';
+import { RecordingMetadata, UploadResponse } from '@/types';
 import * as FileSystem from 'expo-file-system';
 import * as Network from 'expo-network';
 
 export const uploadRecording = async (
   recordingMeta: RecordingMetadata
-): Promise<boolean> => {
+): Promise<UploadResponse | null> => {
   const networkState = await Network.getNetworkStateAsync();
   if (!networkState.isConnected || !networkState.isInternetReachable) {
     console.log('Upload skipped: No internet connection.');
-    return false; // Indicate upload skipped/failed due to network
+    return null; // Indicate upload skipped/failed due to network
   }
 
   const fileUri = recordingMeta.localUri;
@@ -20,11 +20,11 @@ export const uploadRecording = async (
     const fileInfo = await FileSystem.getInfoAsync(fileUri);
     if (!fileInfo.exists) {
       console.error(`[api] Upload failed: File not found at ${fileUri}`);
-      return false; // File doesn't exist, cannot upload
+      return null; // File doesn't exist, cannot upload
     }
   } catch (error) {
     console.error(`[api] Error checking file info for ${fileUri}:`, error);
-    return false; // Error accessing file system
+    return null; // Error accessing file system
   }
 
   const formData = new FormData();
@@ -81,20 +81,22 @@ export const uploadRecording = async (
     if (response.ok) { // Status 200-299 (expecting 201 Created)
       console.log(`[api] Upload successful for ${recordingMeta.id}`);
       try {
-        const responseData = JSON.parse(responseText);
+        const responseData: UploadResponse = JSON.parse(responseText);
         console.log('[api] Upload response data:', responseData);
         // Optionally use responseData (e.g., returned DB IDs) if needed
+        return responseData
       } catch (parseError) {
         console.warn('[api] Upload response was OK, but body was not valid JSON:', parseError);
+        return null
       }
-      return true;
+      // return true;
     } else {
       console.error(`[api] Upload failed for ${recordingMeta.id}: ${response.status} ${responseText}`);
       // Optionally handle specific error codes (e.g., 422 for validation errors)
-      return false;
+      return null;
     }
   } catch (error) {
     console.error(`[api] Upload network error for ${recordingMeta.id}:`, error);
-    return false;
+    return null;
   }
 };

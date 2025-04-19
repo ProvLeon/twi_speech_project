@@ -13,12 +13,19 @@ export interface RecordingSection {
 }
 
 
+export interface RecordingProgress {
+  total_recordings: number;
+  total_required: number;
+  is_complete: boolean;
+}
+
 // NEW: Define structure for participant details
 export interface ParticipantDetails {
   code: string;
   dialect?: string;
   age_range?: string;
   gender?: string;
+  progress: RecordingProgress;
 }
 
 
@@ -39,4 +46,14 @@ export interface RecordingMetadata {
   age_range?: string;
   gender?: string;
   session_id?: string; // Optional session identifier if needed later
+}
+
+export interface UploadResponse {
+  message: string;
+  file_url: string;
+  recording_db_id: string;
+  speaker_db_id: string;
+  participant_code: string;
+  prompt_id: string;
+  progress: RecordingProgress; // Backend sends the updated progress
 }

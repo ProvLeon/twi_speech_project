@@ -212,8 +212,15 @@ export const RECORDING_SECTIONS: RecordingSection[] = [
 ];
 
 export const getTotalPrompts = () => {
-  return RECORDING_SECTIONS.reduce((total, section) => total + section.prompts.length, 0);
+  let total = 0;
+  RECORDING_SECTIONS.forEach(section => {
+    total += section.prompts.length;
+  });
+  return total;
 };
+
+export const EXPECTED_TOTAL_RECORDINGS = getTotalPrompts();
+export const SPONTANEOUS_PROMPTS_COUNT = 8
 
 export const getGlobalPromptIndex = (sectionIndex: number, promptInSectionIndex: number): number => {
   let globalIndex = 0;

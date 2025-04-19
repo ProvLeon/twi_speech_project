@@ -1,3 +1,7 @@
+import { EXPECTED_TOTAL_RECORDINGS, RECORDING_SECTIONS, SPONTANEOUS_PROMPTS_COUNT } from "@/constants/script";
+import { RecordingMetadata, RecordingProgress } from "@/types";
+import { getPendingRecordings } from "./storage";
+
 export const isValidCode = (code?: string | null): boolean => {
   // Check if code is a string and not null/empty
   if (typeof code !== 'string' || !code) {
@@ -47,4 +51,21 @@ const getLastRecordedPosition = async (participantCode: string) => {
     console.error("Error getting last recorded position:", error);
     return { sectionIndex: 0, promptIndex: 0 };
   }
+};
+
+export const checkRecordingCompletion = (recordings: RecordingMetadata[]): RecordingProgress => {
+  const scriptedCount = recordings.filter(rec => !rec.promptId.startsWith('Spontaneous_')).length;
+  const spontaneousCount = recordings.filter(rec => rec.promptId.startsWith('Spontaneous_')).length;
+
+  const isComplete = (
+    recordings.length >= EXPECTED_TOTAL_RECORDINGS &&
+    spontaneousCount >= SPONTANEOUS_PROMPTS_COUNT &&
+    scriptedCount >= (EXPECTED_TOTAL_RECORDINGS - SPONTANEOUS_PROMPTS_COUNT)
+  );
+
+  return {
+    total_recordings: recordings.length,
+    total_required: EXPECTED_TOTAL_RECORDINGS,
+    is_complete: isComplete
+  };
 };
