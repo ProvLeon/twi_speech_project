@@ -7,6 +7,7 @@ export const uploadRecording = async (
   recordingMeta: RecordingMetadata
 ): Promise<UploadResponse | null> => {
   const networkState = await Network.getNetworkStateAsync();
+  console.log('Network state:', networkState);
   if (!networkState.isConnected || !networkState.isInternetReachable) {
     console.log('Upload skipped: No internet connection.');
     return null; // Indicate upload skipped/failed due to network
@@ -97,6 +98,7 @@ export const uploadRecording = async (
     }
   } catch (error) {
     console.error(`[api] Upload network error for ${recordingMeta.id}:`, error);
+    console.log(`Network error ${networkState.isConnected} ${networkState.isInternetReachable}`)
     return null;
   }
 };

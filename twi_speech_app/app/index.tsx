@@ -429,6 +429,8 @@ export default function HomeScreen() {
 
   const handleUploadComplete = useCallback(async (response: UploadResponse) => {
     if (response.progress?.is_complete) {
+
+      if (!participantDetails?.code) return
       // Update the participant's completion status
       const updatedDetails = {
         ...participantDetails,
@@ -456,74 +458,101 @@ export default function HomeScreen() {
     await checkNetwork();
 
     if (!networkAvailable) {
-      return Alert.alert("Offline", "No internet connection available for upload.");
+      Alert.alert("Offline", "No internet connection available for upload.");
+      return; // Exit early if offline
     }
 
-    // Make sure we filter safely
     const toUpload = displayedRecordings.filter(rec => !rec.uploaded);
 
     if (toUpload.length === 0) {
-      return Alert.alert("Up to Date", `No recordings waiting for upload for ${participantDetails.code}.`);
+      Alert.alert("Up to Date", `No recordings waiting for upload for ${participantDetails.code}.`);
+      return; // Exit early if nothing to upload
     }
-    if (isUploading) return;
 
+    // --- Set Loading State AFTER initial checks ---
+    if (isUploading) return; // Prevent double uploads
     setIsUploading(true);
     Alert.alert("Upload Started", `Attempting to upload ${toUpload.length} recording(s) for ${participantDetails.code}...`);
 
     let successCount = 0;
     let failCount = 0;
-    let latestProgress: RecordingProgress | undefined;
+    // --- REMOVED latestProgress definition here, handleUploadComplete manages state ---
+    // let latestProgress: RecordingProgress | undefined;
 
-    for (const recordingMeta of toUpload) {
-      try {
-        // Double-check file existence right before upload
-        const fileExists = await verifyFileExists(recordingMeta.localUri);
-        if (!fileExists) {
-          console.error(`[Upload] File missing, skipping: ${recordingMeta.localUri}`);
+    // --- Use try...finally to guarantee state reset ---
+    try {
+      for (const recordingMeta of toUpload) {
+        try {
+          const fileExists = await verifyFileExists(recordingMeta.localUri);
+          if (!fileExists) {
+            console.error(`[Upload] File missing, skipping: ${recordingMeta.localUri}`);
+            failCount++;
+            continue; // Skip this file
+          }
+
+          console.log(`[Upload] Uploading ${recordingMeta.id}...`);
+          const uploadResult = await uploadRecording(recordingMeta); // uploadResult is UploadResponse | null
+          console.log(`Upload Response for ${recordingMeta.id}:`, uploadResult);
+
+          if (uploadResult) {
+            console.log(`[Upload] Success for ${recordingMeta.id}`);
+            successCount++;
+            await updateRecordingUploadedStatus(recordingMeta.id, true);
+            // --- *** CALL handleUploadComplete HERE *** ---
+            await handleUploadComplete(uploadResult); // Process the response
+            // --- *************************************** ---
+
+            // No need to track latestProgress manually anymore
+            // latestProgress = uploadResult.progress;
+          } else {
+            console.error(`[Upload] Failed for ${recordingMeta.id} (uploadRecording returned null)`);
+            failCount++;
+          }
+
+        } catch (error) {
+          console.error(`[Upload] Unexpected error processing recording ${recordingMeta.id}:`, error);
           failCount++;
-          continue; // Skip to the next file
         }
+      } // End of for loop
 
-        console.log(`[Upload] Uploading ${recordingMeta.id}...`);
-        const uploadResult = await uploadRecording(recordingMeta); // Expects UploadResponse | null
+      // --- Remove redundant state update here, handleUploadComplete does it ---
+      // if (latestProgress && participantDetails) { ... }
 
-        if (uploadResult) {
-          console.log(`[Upload] Success for ${recordingMeta.id}`);
-          successCount++;
-          // Update local metadata status
-          await updateRecordingUploadedStatus(recordingMeta.id, true);
-          // Keep track of the latest progress returned by the backend
-          latestProgress = uploadResult.progress;
-        } else {
-          console.error(`[Upload] Failed for ${recordingMeta.id}`);
-          failCount++;
-          // Optional: Break loop on first failure? Or continue? (Current: Continue)
-        }
-      } catch (error) {
-        console.error(`[Upload] Unexpected error for recording ${recordingMeta.id}:`, error);
-        failCount++;
+      // --- Show final summary alert AFTER the loop ---
+      let finalMessage = `${successCount} uploaded successfully.`;
+      if (failCount > 0) {
+        finalMessage += ` ${failCount} failed. Check logs for details.`;
       }
-    } // End of loop
+      Alert.alert("Upload Complete", finalMessage);
 
-    // Update participant state with the *latest* progress from backend
-    if (latestProgress && participantDetails) {
-      const updatedDetails: ParticipantDetails = {
-        ...participantDetails,
-        progress: latestProgress,
-      };
-      setParticipantDetails(updatedDetails);
-      await saveParticipantDetails(updatedDetails); // Persist updated progress
-      console.log("[Upload] Updated participant progress:", latestProgress);
+      // --- Reload recordings AFTER the loop and alert ---
+      await loadAllRecordings(); // Refresh the list to show updated 'uploaded' status
+
+    } catch (outerError) {
+      console.error("[Upload] Critical error during upload process:", outerError);
+      Alert.alert("Upload Error", "An unexpected error occurred during the upload process.");
+      await loadAllRecordings();
+    } finally {
+      console.log("[Upload] Process finished. Resetting loading state.");
+      setIsUploading(false);
     }
+  }, [
+    // Add handleUploadComplete to dependencies
+    handleUploadComplete,
+    viewMode,
+    participantDetails,
+    networkAvailable,
+    displayedRecordings,
+    isUploading,
+    checkNetwork,
+    triggerHaptic,
+    loadAllRecordings,
+    verifyFileExists,
+    setParticipantDetails, // Still needed by handleUploadComplete
+    saveParticipantDetails, // Still needed by handleUploadComplete
+    updateRecordingUploadedStatus
+  ]);
 
-    let finalMessage = `${successCount} uploaded successfully.`;
-    if (failCount > 0) {
-      finalMessage += ` ${failCount} failed.`;
-    }
-    Alert.alert("Upload Complete", finalMessage);
-
-    await loadAllRecordings();
-  }, [viewMode, participantDetails, networkAvailable, displayedRecordings, isUploading, checkNetwork, triggerHaptic, loadAllRecordings, verifyFileExists]);
 
   const handleSetupComplete = useCallback(async (details: ParticipantDetails) => {
     console.log("HomeScreen: [handleSetupComplete] Received details:", details);

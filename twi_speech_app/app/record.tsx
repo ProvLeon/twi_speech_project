@@ -452,7 +452,7 @@ export default function RecordScreen() {
   }, [
     canGoNext, currentSection, currentSectionIndex, currentPromptInSectionIndex,
     displayMode, hasRecordedCurrentPrompt, isSessionComplete,
-    triggerHaptic, unloadPlaybackSound, showModal, hideModal, router,
+    triggerHaptic, unloadPlaybackSound, router,
     participantDetails, loadRecordingForPrompt
   ]);
 
