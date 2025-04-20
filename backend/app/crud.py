@@ -165,20 +165,39 @@ async def get_speaker_by_code(
         raise # Re-raise DB errors
 
 async def get_all_speakers(
-    collection: AsyncIOMotorCollection,
+    spk_collection: AsyncIOMotorCollection, # Renamed first arg for clarity
+    rec_collection: AsyncIOMotorCollection, # Add recordings collection dependency
     skip: int = 0,
     limit: int = 100 # Default limit for listing
 ) -> List[SpeakerDocument]:
-    """Retrieves a list of speakers with pagination."""
-    speakers_cursor = collection.find({}).skip(skip).limit(limit).sort("created_at", -1)
+    """Retrieves a list of speakers with pagination, including recording progress."""
+    speakers_cursor = spk_collection.find({}).skip(skip).limit(limit).sort("created_at", -1)
     db_speakers_raw = await speakers_cursor.to_list(length=limit)
 
     validated_speakers = []
     for spk_dict_raw in db_speakers_raw:
         spk_dict_converted = _convert_objectid_to_str(spk_dict_raw)
         if not spk_dict_converted: continue
+
         try:
+            # Validate the base speaker document first
             validated_doc = SpeakerDocument(**spk_dict_converted)
+
+            # Get the original ObjectId for progress check
+            speaker_id_obj = spk_dict_raw.get('_id')
+            if speaker_id_obj and isinstance(speaker_id_obj, ObjectId):
+                # Calculate progress
+                progress = await check_recording_completion(rec_collection, speaker_id_obj)
+                # Set the calculated fields on the validated model instance
+                validated_doc.total_recordings = progress.total_recordings
+                validated_doc.recordings_complete = progress.is_complete
+            else:
+                 # Handle cases where _id might be missing or not an ObjectId (shouldn't happen)
+                 logger.warning(f"Could not find valid ObjectId for speaker {spk_dict_converted.get('participant_code', 'N/A')} to check progress.")
+                 validated_doc.total_recordings = 0
+                 validated_doc.recordings_complete = False
+
+
             validated_speakers.append(validated_doc)
         except ValidationError as e:
             doc_id_str = spk_dict_converted.get('id', 'N/A')
@@ -193,16 +212,32 @@ async def get_all_speakers(
     return validated_speakers
 
 async def get_all_speakers_for_export(
-    collection: AsyncIOMotorCollection
+    spk_collection: AsyncIOMotorCollection,
+    rec_collection: AsyncIOMotorCollection # <-- Add recordings collection dependency
 ) -> List[Dict[str, Any]]:
-    """Retrieves all speaker documents formatted as dicts for export."""
-    all_speakers_cursor = collection.find({})
-    speakers_list_raw = await all_speakers_cursor.to_list(length=None)
+    """Retrieves all speaker documents formatted as dicts for export, including progress."""
+    all_speakers_cursor = spk_collection.find({})
+    speakers_list_raw = await all_speakers_cursor.to_list(length=None) # Get raw docs with ObjectIds
 
     processed_list = []
     for spk_raw in speakers_list_raw:
-        spk = _convert_objectid_to_str(spk_raw) # Convert Speaker's _id
+        # Convert Speaker's _id first
+        spk = _convert_objectid_to_str(spk_raw)
         if not spk: continue
+
+        # --- Calculate Progress ---
+        speaker_id_obj = spk_raw.get('_id') # Get the original ObjectId
+        if speaker_id_obj and isinstance(speaker_id_obj, ObjectId):
+            progress = await check_recording_completion(rec_collection, speaker_id_obj)
+            spk['total_recordings'] = progress.total_recordings
+            spk['recordings_complete'] = progress.is_complete
+        else:
+             # Default values if ID is missing or invalid
+             spk['total_recordings'] = 0
+             spk['recordings_complete'] = False
+             logger.warning(f"Could not find valid ObjectId for speaker export {spk.get('participant_code', 'N/A')} to check progress.")
+        # --- End Progress Calculation ---
+
 
         # Convert datetimes to ISO strings for Excel compatibility
         for dt_field in ['created_at', 'updated_at']:
@@ -216,6 +251,9 @@ async def get_all_speakers_for_export(
         spk.setdefault('age_range', None)
         spk.setdefault('gender', None)
         spk.setdefault('updated_at', None)
+        # Ensure new fields have defaults if calculation failed (covered above)
+        spk.setdefault('total_recordings', 0)
+        spk.setdefault('recordings_complete', False)
 
         processed_list.append(spk)
 

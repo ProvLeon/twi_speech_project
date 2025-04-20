@@ -123,73 +123,80 @@ async def get_speaker_details(
        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve speaker details.")
 
 @app.get(
-   "/speakers/",
-   response_model=List[SpeakerDocument],
-   summary="List All Speakers",
-   tags=["Speakers"]
+    "/speakers/",
+    response_model=List[SpeakerDocument], # Still uses SpeakerDocument, now with optional fields
+    summary="List All Speakers",
+    tags=["Speakers"]
 )
 async def list_all_speakers(
-   skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
-   limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return"),
-   collection = Depends(get_spk_collection)
+    skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return"),
+    spk_collection = Depends(get_spk_collection), # Speaker collection dependency
+    rec_collection = Depends(get_collection)      # <-- ADD Recording collection dependency
 ):
-   """Retrieves a list of all registered speakers with pagination."""
-   try:
-       speakers = await get_all_speakers(collection, skip=skip, limit=limit)
-       return speakers
-   except Exception as e:
-       logger.exception("Failed to retrieve speakers list.")
-       raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve speakers list.")
+    """Retrieves a list of all registered speakers with pagination and recording progress."""
+    try:
+        # Pass both collections to the updated CRUD function
+        speakers = await get_all_speakers(spk_collection, rec_collection, skip=skip, limit=limit)
+        return speakers
+    except Exception as e:
+        logger.exception("Failed to retrieve speakers list.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve speakers list.")
+
 
 @app.get(
-   "/speakers/export/excel",
-   summary="Export All Speaker Details to Excel",
-   tags=["Speakers"],
-   response_class=StreamingResponse
+    "/speakers/export/excel",
+    summary="Export All Speaker Details to Excel",
+    tags=["Speakers"],
+    response_class=StreamingResponse
 )
 async def export_speakers_to_excel(
-   collection = Depends(get_spk_collection)
+    collection = Depends(get_spk_collection),    # Speaker collection
+    rec_collection = Depends(get_collection)      # <-- ADD Recording collection dependency
 ):
-   """Retrieves all speaker details and exports them into an Excel (.xlsx) file."""
-   try:
-       logger.info("Fetching all speaker data for Excel export...")
-       speakers_data = await get_all_speakers_for_export(collection)
+    """Retrieves all speaker details, including recording progress, and exports them into an Excel (.xlsx) file."""
+    try:
+        logger.info("Fetching all speaker data for Excel export...")
+        # Pass both collections to the updated CRUD function
+        speakers_data = await get_all_speakers_for_export(collection, rec_collection)
 
-       if not speakers_data:
-           logger.warning("No speaker data found for export.")
-           # Return an empty file or a 204 No Content? Returning empty file for consistency.
-           df = pd.DataFrame()
-       else:
-            logger.info(f"Retrieved {len(speakers_data)} speakers for export.")
-            df = pd.DataFrame(speakers_data)
-             # Optional: Select/reorder columns for the Excel file
-            # export_columns = ['id', 'participant_code', 'dialect', 'age_range', 'gender', 'created_at', 'updated_at']
-            # df = df[export_columns] # Select only desired columns
+        if not speakers_data:
+            logger.warning("No speaker data found for export.")
+            df = pd.DataFrame()
+        else:
+             logger.info(f"Retrieved {len(speakers_data)} speakers for export.")
+             df = pd.DataFrame(speakers_data)
+             # Optional: Explicitly set column order for the export if desired
+             desired_columns = [
+                 'id', 'participant_code', 'dialect', 'age_range', 'gender',
+                 'total_recordings', 'recordings_complete', # <-- Added columns
+                 'created_at', 'updated_at'
+                ]
+             # Filter and reorder - handle missing columns gracefully
+             df = df.reindex(columns=[col for col in desired_columns if col in df.columns])
 
-       output = io.BytesIO()
-       # Use xlsxwriter engine for better compatibility if needed, default openpyxl is usually fine
-       with pd.ExcelWriter(output, engine='openpyxl') as writer:
-           df.to_excel(writer, index=False, sheet_name='Speakers')
-           # You could add more sheets here if needed
 
-       output.seek(0)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Speakers')
 
-       # Prepare response headers
-       filename = f"twi_speakers_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-       headers = {
-           'Content-Disposition': f'attachment; filename="{filename}"'
-       }
+        output.seek(0)
 
-       logger.info(f"Successfully generated Excel export: {filename}")
-       return StreamingResponse(
-           output,
-           media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-           headers=headers
-       )
+        filename = f"twi_speakers_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        }
 
-   except Exception as e:
-       logger.exception("Failed to generate speaker Excel export.")
-       raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to generate speaker Excel export.")
+        logger.info(f"Successfully generated Excel export: {filename}")
+        return StreamingResponse(
+            output,
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers=headers
+        )
+
+    except Exception as e:
+        logger.exception("Failed to generate speaker Excel export.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to generate speaker Excel export.")
 
 # --- Recording Endpoints ---
 

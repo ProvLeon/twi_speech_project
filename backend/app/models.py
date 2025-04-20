@@ -18,6 +18,8 @@ class SpeakerDocument(BaseModel):
     gender: Optional[str] = Field(None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(ghana_tz))
     updated_at: Optional[datetime] = None
+    total_recordings: Optional[int] = Field(None, description="Calculated total recordings by this speaker")
+    recordings_complete: Optional[bool] = Field(None, description="Calculated flag indicating if all required recordings are present")
 
     @field_validator('participant_code')
     def participant_code_must_be_valid(cls, v):
