@@ -130,6 +130,10 @@ class DeleteSummaryResponse(BaseModel):
     r2_attempted_count: int
     r2_failed_keys: List[str]
 
+class DeleteConfirmationResponse(BaseModel):
+    """Simple response for confirming deletion operations."""
+    message: str
+    deleted_count: int
 
 class UploadResponse(BaseModel):
     message: str
