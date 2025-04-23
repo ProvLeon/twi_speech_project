@@ -1,4 +1,4 @@
-import { UPLOAD_AUDIO_ENDPOINT } from '@/constants/api';
+import { API_BASE_URL, UPLOAD_AUDIO_ENDPOINT } from '@/constants/api';
 import { RecordingMetadata, UploadResponse } from '@/types';
 import * as FileSystem from 'expo-file-system';
 import * as Network from 'expo-network';
@@ -99,6 +99,62 @@ export const uploadRecording = async (
   } catch (error) {
     console.error(`[api] Upload network error for ${recordingMeta.id}:`, error);
     console.log(`Network error ${networkState.isConnected} ${networkState.isInternetReachable}`)
+    return null;
+  }
+};
+
+export const checkParticipantExists = async (
+  participantCode: string
+): Promise<{ participant: any; recordings: any[] } | null> => {
+  try {
+    // Check network state
+    const networkState = await Network.getNetworkStateAsync();
+    if (!networkState.isConnected || !networkState.isInternetReachable) {
+      console.log('[api] Participant check skipped: No internet connection.');
+      return null;
+    }
+
+    // Get participant details
+    const response = await fetch(`${API_BASE_URL}/speakers/${participantCode}`);
+
+    // If participant doesn't exist (404), return null
+    if (response.status === 404) {
+      console.log(`[api] Participant ${participantCode} not found on server.`);
+      return null;
+    }
+
+    // Handle other errors
+    if (!response.ok) {
+      console.error(`[api] Error checking participant: ${response.status}`);
+      return null;
+    }
+
+    // Parse participant data
+    const participant = await response.json();
+    console.log(`[api] Participant ${participantCode} found on server:`, participant);
+
+    // Make sure we have the fields we need
+    const formattedParticipant = {
+      ...participant,
+      dialect: participant.dialect || undefined,
+      age_range: participant.age_range || undefined,
+      gender: participant.gender || undefined
+    };
+
+    // Now fetch participant's recordings
+    const recordingsResponse = await fetch(`${API_BASE_URL}/recordings?participant_code=${participantCode}&limit=1000`);
+
+    if (!recordingsResponse.ok) {
+      console.error(`[api] Error fetching recordings: ${recordingsResponse.status}`);
+      return { participant: formattedParticipant, recordings: [] };
+    }
+
+    const recordings = await recordingsResponse.json();
+    console.log(`[api] Found ${recordings.length} recordings for ${participantCode}`);
+
+    return { participant: formattedParticipant, recordings };
+  } catch (error) {
+    console.error(`[api] Error checking participant ${participantCode}:`, error);
     return null;
   }
 };

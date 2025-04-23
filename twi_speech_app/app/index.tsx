@@ -1,4 +1,3 @@
-import * as FileSystem from 'expo-file-system';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { View, Text, Alert, ActivityIndicator, FlatList, RefreshControl, StyleSheet, TouchableOpacity } from 'react-native';
 import { useRouter, useNavigation, useFocusEffect } from 'expo-router';
@@ -22,7 +21,7 @@ import { RecordingMetadata, ParticipantDetails, UploadResponse } from '@/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import SetupScreenContent from '@/components/SetupScreenContent';
 import { ThemedSafeAreaView } from '@/components/ThemedSafeAreaView';
-import { isValidCode } from '@/lib/utils';
+import { isValidCode, verifyFileExists } from '@/lib/utils';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { ParticipantSelector } from '@/components/ParticipantSelector';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -567,16 +566,7 @@ export default function HomeScreen() {
   }, [loadAllRecordings, loadParticipantCount, checkNetwork]);
 
   // --- Audio Playback Management ---
-  const verifyFileExists = useCallback(async (uri: string): Promise<boolean> => {
-    if (!uri) return false;
-    try {
-      const fileInfo = await FileSystem.getInfoAsync(uri);
-      return fileInfo.exists;
-    } catch (error) {
-      console.error("Error verifying file existence:", error);
-      return false;
-    }
-  }, []);
+
 
   const unloadPlaybackSound = useCallback(async () => {
     if (playbackState.sound) {
@@ -611,11 +601,13 @@ export default function HomeScreen() {
       return;
     }
 
-    // Check if file exists
-    const fileExists = await verifyFileExists(uri);
-    if (!fileExists) {
-      Alert.alert("Playback Error", "Audio file not found.");
-      return;
+    // For local files, check if file exists
+    if (!uri.startsWith('http://') && !uri.startsWith('https://')) {
+      const fileExists = await verifyFileExists(uri);
+      if (!fileExists) {
+        Alert.alert("Playback Error", "Audio file not found.");
+        return;
+      }
     }
 
     // Set refs to loading state
@@ -877,22 +869,49 @@ export default function HomeScreen() {
         throw new Error("Invalid participant code provided.");
       }
 
+      // Save the participant details
       const savedSuccessfully = await saveParticipantDetails(details);
       if (!savedSuccessfully) {
         throw new Error("Failed to save participant details to storage.");
       }
 
-      setParticipantDetails(details);
+      // Reload all recordings to get the imported ones
+      await loadAllRecordings();
+
+      // Count recordings for this participant to update progress
+      const participantRecordings = allRecordings.filter(
+        rec => rec.participantCode === details.code
+      );
+
+      // Only update if we found recordings
+      if (participantRecordings.length > 0) {
+        const updatedDetails: ParticipantDetails = {
+          ...details,
+          progress: {
+            total_recordings: participantRecordings.length,
+            total_required: EXPECTED_TOTAL_RECORDINGS,
+            is_complete: participantRecordings.length >= EXPECTED_TOTAL_RECORDINGS
+          }
+        };
+
+        // Save the updated progress
+        await saveParticipantDetails(updatedDetails);
+        setParticipantDetails(updatedDetails);
+      } else {
+        setParticipantDetails(details);
+      }
+
+      // Complete setup
+      await loadParticipantCount();
       setIsSetupMode(false);
       setViewMode('participant');
-      await loadAllRecordings();
-      await loadParticipantCount();
+
     } catch (error: any) {
       Alert.alert("Error", `Failed to finalize setup: ${error.message || 'Unknown error'}`);
     } finally {
       setIsLoading(false);
     }
-  }, [loadAllRecordings, loadParticipantCount]);
+  }, [allRecordings, loadAllRecordings, loadParticipantCount]);
 
   const handleParticipantSelected = useCallback(async (participant: ParticipantDetails | null) => {
     if (participant) {

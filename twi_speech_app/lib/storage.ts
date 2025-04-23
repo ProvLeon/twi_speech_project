@@ -331,6 +331,14 @@ export const saveRecordingFile = async (tempUri: string, filename: string): Prom
 
 export const deleteLocalRecording = async (localUri: string | null | undefined): Promise<void> => {
   if (!localUri) return; // Silently ignore invalid URIs
+
+  // Check if this is a remote URL (from server imports)
+  if (localUri.startsWith('http://') || localUri.startsWith('https://')) {
+    // For remote URLs, we don't need to delete the actual file, just log and return
+    console.log(`[storage] Skipping delete for remote file: ${localUri}`);
+    return;
+  }
+
   try {
     const fileInfo = await FileSystem.getInfoAsync(localUri);
     if (fileInfo.exists) {

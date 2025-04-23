@@ -17,7 +17,7 @@ import { RecordingMetadata, ParticipantDetails, ScriptPrompt } from '@/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ThemedSafeAreaView } from '@/components/ThemedSafeAreaView';
 import { useThemeColor } from '@/hooks/useThemeColor';
-import { isValidCode } from '@/lib/utils';
+import { isValidCode, verifyFileExists } from '@/lib/utils';
 import { SectionCompleteDialog } from '@/components/SectionCompleteDialog'; // Ensure this path is correct
 
 type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'stopped' | 'error';
@@ -99,7 +99,11 @@ export default function RecordScreen() {
     ? displayMode === 'prompt' && !isSessionComplete && !isPlaybackActive
     : false;
   const showReplay = hasRecordedCurrentPrompt && !isRecording && displayMode === 'prompt';
-  const canGoNext = displayMode === 'prompt' && hasRecordedCurrentPrompt && !isRecording && !isPlaybackActive && !isSessionComplete;
+  const canGoNext = displayMode === 'prompt' &&
+    (hasRecordedCurrentPrompt || currentPromptRecordingUri === "remote_url") &&
+    !isRecording &&
+    !isPlaybackActive &&
+    !isSessionComplete;
   const canGoPrevious = displayMode === 'prompt' && !isRecording && !isPlaybackActive && (currentSectionIndex > 0 || currentPromptInSectionIndex > 0);
 
   const getLastRecordedPosition = async (participantCode: string) => {
@@ -168,11 +172,7 @@ export default function RecordScreen() {
     setPlaybackUiUpdate(v => v + 1);
   }, []);
 
-  const verifyFileExists = useCallback(async (uri: string): Promise<boolean> => {
-    if (!uri) return false;
-    try { const fileInfo = await FileSystem.getInfoAsync(uri); return fileInfo.exists; }
-    catch (error) { console.error("Error verifying file existence:", error); return false; }
-  }, []);
+
 
   const unloadPlaybackSound = useCallback(async () => {
     console.log("Attempting to unload playback sound..");
@@ -238,28 +238,74 @@ export default function RecordScreen() {
 
     console.log("handlePlayPause called:", { URI: targetUri, currentStatus, hasSound: !!currentSound });
 
+    // Special case for remote URLs that can't be played
+    if (targetUri === "remote_url") {
+      console.log("Cannot play remote URL due to authentication requirements");
+      playbackStateRef.error = "Remote recordings cannot be played in record mode";
+      playbackStateRef.status = 'error';
+      triggerPlaybackUiUpdate();
+      return;
+    }
+
+    // Rest of the function remains the same
     if (currentStatus === 'playing' && currentSound) {
       console.log("Pausing playback");
-      try { await currentSound.pauseAsync(); playbackStateRef.status = 'paused'; triggerPlaybackUiUpdate(); }
-      catch (error: any) { console.error("Error pausing playback:", error); playbackStateRef.error = `Failed to pause: ${error.message}`; playbackStateRef.status = 'error'; triggerPlaybackUiUpdate(); }
+      try {
+        await currentSound.pauseAsync();
+        playbackStateRef.status = 'paused';
+        triggerPlaybackUiUpdate();
+      }
+      catch (error: any) {
+        console.error("Error pausing playback:", error);
+        playbackStateRef.error = `Failed to pause: ${error.message}`;
+        playbackStateRef.status = 'error';
+        triggerPlaybackUiUpdate();
+      }
     }
     else if (currentStatus === 'paused' && currentSound) {
       console.log("Resuming playback");
-      try { await currentSound.playAsync(); playbackStateRef.status = 'playing'; triggerPlaybackUiUpdate(); }
-      catch (error: any) { console.error("Error resuming playback:", error); playbackStateRef.error = `Failed to resume: ${error.message}`; playbackStateRef.status = 'error'; triggerPlaybackUiUpdate(); }
+      try {
+        await currentSound.playAsync();
+        playbackStateRef.status = 'playing';
+        triggerPlaybackUiUpdate();
+      }
+      catch (error: any) {
+        console.error("Error resuming playback:", error);
+        playbackStateRef.error = `Failed to resume: ${error.message}`;
+        playbackStateRef.status = 'error';
+        triggerPlaybackUiUpdate();
+      }
     }
-    else if (targetUri && ['idle', 'stopped', 'error'].includes(currentStatus)) {
+    else if (targetUri && targetUri !== "remote_url" && ['idle', 'stopped', 'error'].includes(currentStatus)) {
       console.log("Starting new playback for URI:", targetUri);
       await unloadPlaybackSound();
-      playbackStateRef.status = 'loading'; playbackStateRef.currentUri = targetUri; triggerPlaybackUiUpdate();
+      playbackStateRef.status = 'loading';
+      playbackStateRef.currentUri = targetUri;
+      triggerPlaybackUiUpdate();
 
       try {
+        // For local files, verify they exist
         const fileExists = await verifyFileExists(targetUri);
         if (!fileExists) throw new Error(`Audio file doesn't exist at: ${targetUri}`);
-        const { sound } = await Audio.Sound.createAsync({ uri: targetUri }, { shouldPlay: true, progressUpdateIntervalMillis: 100 }, onPlaybackStatusUpdate);
-        playbackStateRef.sound = sound; playbackStateRef.status = 'playing'; playbackStateRef.error = null; triggerPlaybackUiUpdate();
+
+        // Create the sound object
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: targetUri },
+          { shouldPlay: true, progressUpdateIntervalMillis: 100 },
+          onPlaybackStatusUpdate
+        );
+
+        playbackStateRef.sound = sound;
+        playbackStateRef.status = 'playing';
+        playbackStateRef.error = null;
+        triggerPlaybackUiUpdate();
       } catch (error: any) {
-        console.error("Error creating/starting sound:", error); playbackStateRef.error = `Playback failed: ${error.message}`; playbackStateRef.status = 'error'; playbackStateRef.sound = null; playbackStateRef.currentUri = null; triggerPlaybackUiUpdate();
+        console.error("Error creating/starting sound:", error);
+        playbackStateRef.error = `Playback failed: ${error.message}`;
+        playbackStateRef.status = 'error';
+        playbackStateRef.sound = null;
+        playbackStateRef.currentUri = null;
+        triggerPlaybackUiUpdate();
       }
     } else {
       console.log("Play/Pause ignored - Status:", currentStatus, "URI:", targetUri);
@@ -278,6 +324,31 @@ export default function RecordScreen() {
       return;
     }
 
+    // If we have a remote recording, ask user if they want to overwrite it
+    if (currentPromptRecordingUri === "remote_url") {
+      Alert.alert(
+        "Recording Already Exists",
+        "This prompt already has a recording on the server. Do you want to record a new version?",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Record New",
+            onPress: () => {
+              if (playbackStateRef.status !== 'idle' && playbackStateRef.status !== 'stopped') {
+                unloadPlaybackSound();
+              }
+              console.log("Starting new recording to replace remote one...");
+              setCurrentPromptRecordingUri(null);
+              setCurrentPromptRecordingDuration(undefined);
+              triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+              startRecording();
+            }
+          }
+        ]
+      );
+      return;
+    }
+
     if (playbackStateRef.status !== 'idle' && playbackStateRef.status !== 'stopped') {
       unloadPlaybackSound();
     }
@@ -287,7 +358,7 @@ export default function RecordScreen() {
     setCurrentPromptRecordingDuration(undefined);
     triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
     startRecording();
-  }, [participantDetails, currentPrompt, startRecording, unloadPlaybackSound, playbackStateRef, triggerHaptic]);
+  }, [participantDetails, currentPrompt, startRecording, unloadPlaybackSound, playbackStateRef, triggerHaptic, currentPromptRecordingUri]);
 
   const handleStopPress = useCallback(async () => {
     if (!participantDetails?.code) {
@@ -338,30 +409,55 @@ export default function RecordScreen() {
   const loadRecordingForPrompt = useCallback(async (promptId: string | undefined, code: string | undefined) => {
     if (!promptId || !code) {
       console.log(`[loadRecordingForPrompt] Invalid promptId (${promptId}) or code (${code})`);
-      setCurrentPromptRecordingUri(null); setCurrentPromptRecordingDuration(undefined); return;
+      setCurrentPromptRecordingUri(null);
+      setCurrentPromptRecordingDuration(undefined);
+      return;
     }
+
     console.log(`[loadRecordingForPrompt] Loading for prompt ${promptId}, participant ${code}`);
+
     try {
       const allRecordings = await getPendingRecordings();
       console.log(`[loadRecordingForPrompt] Found ${allRecordings.length} total recordings`);
-      const existingRecording = allRecordings.find(rec => rec.promptId === promptId && rec.participantCode === code);
+
+      const existingRecording = allRecordings.find(rec =>
+        rec.promptId === promptId && rec.participantCode === code
+      );
+
       console.log(`[loadRecordingForPrompt] Found recording for this prompt:`, existingRecording ? "yes" : "no");
+
       if (existingRecording?.localUri) {
-        const fileExists = await verifyFileExists(existingRecording.localUri);
-        if (fileExists) {
-          console.log(`[loadRecordingForPrompt] File exists: ${existingRecording.localUri}`);
-          setCurrentPromptRecordingUri(existingRecording.localUri); setCurrentPromptRecordingDuration(existingRecording.recordingDuration);
+        // Check if it's a remote URL
+        const isRemoteUrl = existingRecording.localUri.startsWith('http://') ||
+          existingRecording.localUri.startsWith('https://');
+
+        if (isRemoteUrl) {
+          console.log(`[loadRecordingForPrompt] Remote file URL detected: ${existingRecording.localUri}`);
+          // For remote URLs, set a flag so we know it's a remote file but can't be played
+          setCurrentPromptRecordingUri("remote_url"); // Special marker to indicate it's a remote URL
+          setCurrentPromptRecordingDuration(existingRecording.recordingDuration);
         } else {
-          console.warn(`[loadRecordingForPrompt] File doesn't exist at path: ${existingRecording.localUri}`);
-          setCurrentPromptRecordingUri(existingRecording.localUri); setCurrentPromptRecordingDuration(existingRecording.recordingDuration);
+          // Local file, verify it exists
+          const fileExists = await verifyFileExists(existingRecording.localUri);
+          if (fileExists) {
+            console.log(`[loadRecordingForPrompt] Local file exists: ${existingRecording.localUri}`);
+            setCurrentPromptRecordingUri(existingRecording.localUri);
+            setCurrentPromptRecordingDuration(existingRecording.recordingDuration);
+          } else {
+            console.warn(`[loadRecordingForPrompt] Local file doesn't exist at path: ${existingRecording.localUri}`);
+            setCurrentPromptRecordingUri(null);
+            setCurrentPromptRecordingDuration(undefined);
+          }
         }
       } else {
         console.log(`[loadRecordingForPrompt] No recording found or URI is empty`);
-        setCurrentPromptRecordingUri(null); setCurrentPromptRecordingDuration(undefined);
+        setCurrentPromptRecordingUri(null);
+        setCurrentPromptRecordingDuration(undefined);
       }
     } catch (error) {
       console.error("[loadRecordingForPrompt] Error loading specific recording:", error);
-      setCurrentPromptRecordingUri(null); setCurrentPromptRecordingDuration(undefined);
+      setCurrentPromptRecordingUri(null);
+      setCurrentPromptRecordingDuration(undefined);
     }
   }, [verifyFileExists]);
 
@@ -738,7 +834,27 @@ export default function RecordScreen() {
           <View className="flex-row justify-between w-full max-w-sm items-center px-2">
             <Button title="" icon="arrow-left-circle-outline" iconSize={40} onPress={handlePreviousPrompt} disabled={!canGoPrevious} className="p-2 rounded-full" iconColor={iconColor} disabledClassName="opacity-30" />
             {showReplay ? (
-              <Button title="" icon={playbackStateRef.status === 'playing' ? "pause-circle-outline" : "play-circle-outline"} iconSize={56} onPress={handlePlayPause} disabled={isRecording || playbackStateRef.status === 'loading'} isLoading={playbackStateRef.status === 'loading'} className="p-2 rounded-full" iconColor={primaryColor} disabledClassName="opacity-30" />
+              currentPromptRecordingUri === "remote_url" ? (
+                // Display a message for remote recordings that can't be played
+                <View style={{ width: 56, height: 56, justifyContent: 'center', alignItems: 'center' }}>
+                  <MaterialCommunityIcons name="cloud-check" size={40} color={primaryColor} />
+                  <Text className="text-xs text-center mt-1" style={{ color: themedTextColor, width: 80 }}>
+                    Already Uploaded
+                  </Text>
+                </View>
+              ) : (
+                <Button
+                  title=""
+                  icon={playbackStateRef.status === 'playing' ? "pause-circle-outline" : "play-circle-outline"}
+                  iconSize={56}
+                  onPress={handlePlayPause}
+                  disabled={isRecording || playbackStateRef.status === 'loading'}
+                  isLoading={playbackStateRef.status === 'loading'}
+                  className="p-2 rounded-full"
+                  iconColor={primaryColor}
+                  disabledClassName="opacity-30"
+                />
+              )
             ) : (
               <View style={{ width: 60, height: 60 }} />
             )}
