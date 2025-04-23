@@ -14,8 +14,9 @@ import {
   deleteAllDeviceRecordings,
   deleteAllRecordingsForParticipant,
   getAllParticipants,
+  savePendingRecording,
 } from '@/lib/storage';
-import { uploadRecording } from '@/lib/api';
+import { checkParticipantExists, uploadRecording } from '@/lib/api';
 import * as Network from 'expo-network';
 import { RecordingMetadata, ParticipantDetails, UploadResponse } from '@/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -713,11 +714,170 @@ export default function HomeScreen() {
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
     triggerHaptic();
-    await loadAllRecordings();
-    await loadParticipantCount();
-    await checkNetwork();
-    setIsRefreshing(false);
-  }, [loadAllRecordings, loadParticipantCount, checkNetwork, triggerHaptic]);
+
+    try {
+      // First load all local recordings
+      await loadAllRecordings();
+      await loadParticipantCount();
+      await checkNetwork();
+
+      // Then, if we have a participant and we're online, check for server recordings
+      if (participantDetails?.code && networkAvailable) {
+        console.log(`Checking server for recordings for participant ${participantDetails.code}...`);
+
+        // Import from checkParticipantExists from api.ts
+        const serverData = await checkParticipantExists(participantDetails.code);
+
+        if (serverData && serverData.recordings && serverData.recordings.length > 0) {
+          console.log(`Found ${serverData.recordings.length} recordings on server for ${participantDetails.code}`);
+
+          // Compare server recordings with local ones to find missing recordings
+          const localRecordings = allRecordings.filter(
+            rec => rec.participantCode === participantDetails.code
+          );
+
+          const localPromptIds = new Set(localRecordings.map(rec => rec.promptId));
+
+          // Find recordings on server that aren't in local storage
+          const missingRecordings = serverData.recordings.filter(
+            serverRec => !localPromptIds.has(serverRec.prompt_id)
+          );
+
+          if (missingRecordings.length > 0) {
+            console.log(`Found ${missingRecordings.length} recordings on server that are not in local storage`);
+
+            // Ask user if they want to import these recordings
+            Alert.alert(
+              "Server Recordings Found",
+              `Found ${missingRecordings.length} recordings on the server that are not on this device. Import them?`,
+              [
+                {
+                  text: "No",
+                  style: "cancel"
+                },
+                {
+                  text: "Yes, Import",
+                  onPress: async () => {
+                    // Show importing indicator
+                    setIsRefreshing(true);
+
+                    let importedCount = 0;
+
+                    try {
+                      for (const serverRec of missingRecordings) {
+                        // Create a unique ID for each imported recording
+                        const uniqueId = `import_${serverRec.id || Math.random().toString(36).substring(2, 15)}`;
+
+                        // Create local metadata record that uses the server URL
+                        const localRecording: RecordingMetadata = {
+                          id: uniqueId,
+                          participantCode: serverRec.participant_code,
+                          promptId: serverRec.prompt_id,
+                          promptText: serverRec.prompt_text || serverRec.prompt_id.replace(/_/g, ' '),
+                          timestamp: new Date(serverRec.uploaded_at || Date.now()).getTime(),
+                          localUri: serverRec.file_url, // Use the remote URL directly
+                          originalFilename: serverRec.filename_original || `${serverRec.prompt_id}.m4a`,
+                          contentType: serverRec.content_type || 'audio/mp4',
+                          uploaded: true, // Mark as already uploaded since we're using the server URL
+                          recordingDuration: serverRec.recording_duration || 0,
+                          dialect: serverData.participant.dialect || participantDetails.dialect,
+                          age_range: serverData.participant.age_range || participantDetails.age_range,
+                          gender: serverData.participant.gender || participantDetails.gender,
+                          uploadStatus: 'pending'
+                        };
+
+                        // Save to local storage
+                        await savePendingRecording(localRecording);
+                        importedCount++;
+                      }
+
+                      // Reload recordings after import
+                      await loadAllRecordings();
+
+                      // Update progress for participant
+                      const allParticipantRecordings = allRecordings.filter(
+                        rec => rec.participantCode === participantDetails.code
+                      );
+
+                      // Update the participant's progress
+                      if (allParticipantRecordings.length > 0) {
+                        const updatedDetails: ParticipantDetails = {
+                          ...participantDetails,
+                          progress: {
+                            total_recordings: allParticipantRecordings.length,
+                            total_required: EXPECTED_TOTAL_RECORDINGS,
+                            is_complete: allParticipantRecordings.length >= EXPECTED_TOTAL_RECORDINGS
+                          }
+                        };
+
+                        await saveParticipantDetails(updatedDetails);
+                        setParticipantDetails(updatedDetails);
+                      }
+
+                      Alert.alert(
+                        "Import Complete",
+                        `Successfully imported ${importedCount} recordings from the server.`
+                      );
+
+                    } catch (error) {
+                      console.error("Error importing server recordings:", error);
+                      Alert.alert(
+                        "Import Error",
+                        `Error importing recordings: ${error}`
+                      );
+                    } finally {
+                      setIsRefreshing(false);
+                    }
+                  }
+                }
+              ]
+            );
+          } else {
+            console.log("No new recordings found on server to import");
+          }
+
+          // Update participant details if needed
+          if (serverData.participant) {
+            // Check if we need to update local participant details with server data
+            const serverProgress = serverData.participant.progress;
+            const localProgress = participantDetails.progress;
+
+            // If server reports more recordings or completion status differs, update
+            if (serverProgress && (
+              (serverProgress.total_recordings > localProgress.total_recordings) ||
+              (serverProgress.is_complete && !localProgress.is_complete)
+            )) {
+
+              console.log("Updating participant progress from server data");
+
+              const updatedDetails: ParticipantDetails = {
+                ...participantDetails,
+                dialect: serverData.participant.dialect || participantDetails.dialect,
+                age_range: serverData.participant.age_range || participantDetails.age_range,
+                gender: serverData.participant.gender || participantDetails.gender,
+                progress: serverProgress
+              };
+
+              await saveParticipantDetails(updatedDetails);
+              setParticipantDetails(updatedDetails);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error during refresh with server check:", error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [
+    loadAllRecordings,
+    loadParticipantCount,
+    checkNetwork,
+    triggerHaptic,
+    participantDetails,
+    networkAvailable,
+    allRecordings
+  ]);
 
   const handleDeleteRecording = useCallback((id: string, promptId: string) => {
     if (isDeletingAll || isUploading) return;
