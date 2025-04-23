@@ -1,7 +1,6 @@
 import { EXPECTED_TOTAL_RECORDINGS, RECORDING_SECTIONS, SPONTANEOUS_PROMPTS_COUNT } from "@/constants/script";
 import { RecordingMetadata, RecordingProgress } from "@/types";
 import * as FileSystem from 'expo-file-system';
-import { useCallback } from "react";
 import { getPendingRecordings } from "./storage";
 
 export const isValidCode = (code?: string | null): boolean => {
@@ -73,7 +72,7 @@ export const checkRecordingCompletion = (recordings: RecordingMetadata[]): Recor
 };
 
 
-export const verifyFileExists = useCallback(async (uri: string): Promise<boolean> => {
+export const verifyFileExists = async (uri: string): Promise<boolean> => {
   if (!uri) return false;
 
   // If it's a remote URL, we can't verify it with FileSystem.getInfoAsync
@@ -89,4 +88,4 @@ export const verifyFileExists = useCallback(async (uri: string): Promise<boolean
     console.error("Error verifying file existence:", error);
     return false;
   }
-}, []);
+};
