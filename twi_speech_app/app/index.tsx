@@ -35,7 +35,7 @@ const WELCOME_SEEN_KEY = 'welcomeScreenSeen_v1';
 
 type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'error';
 type ViewMode = 'participant' | 'settings' | 'select-participant' | 'create-participant' | 'edit-participant' | 'participant-recordings';
-
+type UploadProgressState = { current: number; total: number } | null;
 
 
 export default function HomeScreen() {
@@ -52,6 +52,7 @@ export default function HomeScreen() {
   const cardBgColor = useThemeColor({ light: '#F9FAFB', dark: '#1F2937' }, 'card');
   const borderColor = useThemeColor({ light: '#E5E7EB', dark: '#374151' }, 'border');
 
+
   // State hooks
   const [isCheckingWelcome, setIsCheckingWelcome] = useState(true);
   const [hasSeenWelcome, setHasSeenWelcome] = useState(false);
@@ -67,6 +68,10 @@ export default function HomeScreen() {
   const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [participantCount, setParticipantCount] = useState<number>(0);
   const [settingsTabIndex, setSettingsTabIndex] = useState<number>(0); // 0: All Recordings, 1: Participants
+  // NEW Upload State
+  const [uploadingItemId, setUploadingItemId] = useState<string | null>(null); // ID of the item currently uploading
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressState>(null); // { current: number, total: number }
+
 
   // --- used Refs instead of state for audio playback ---
   const playbackState = useRef({
@@ -91,12 +96,11 @@ export default function HomeScreen() {
   const checkNetwork = useCallback(async () => {
     try {
       const state = await Network.getNetworkStateAsync();
-      // Safely check properties with optional chaining
       const isConnected = !!(state?.isConnected) && !!(state?.isInternetReachable);
       setNetworkAvailable(prev => {
-        if (prev !== isConnected) {
-          console.log(`HomeScreen: Network status changed: ${isConnected ? 'Online' : 'Offline'}`);
-        }
+        // if (prev !== isConnected) { // Reduce logging noise
+        //   console.log(`HomeScreen: Network status changed: ${isConnected ? 'Online' : 'Offline'}`);
+        // }
         return isConnected;
       });
     } catch (error) {
@@ -106,14 +110,18 @@ export default function HomeScreen() {
   }, []);
 
   const loadAllRecordings = useCallback(async () => {
-    console.log("HomeScreen: Loading ALL recordings...");
+    console.log("HomeScreen: Loading ALL recordings from storage...");
     try {
-      const storedRecordings = await getPendingRecordings();
-      // confirming we have valid recordings before sorting
+      const storedRecordings = await getPendingRecordings(); // This fetches from AsyncStorage
       if (Array.isArray(storedRecordings)) {
-        storedRecordings.sort((a, b) => b.timestamp - a.timestamp);
-        setAllRecordings(storedRecordings);
-        console.log(`HomeScreen: Loaded ${storedRecordings.length} total recordings.`);
+        // Reset 'uploading' status on load, keep 'failed' or 'pending'
+        const recordingsWithResetStatus = storedRecordings.map(rec => ({
+          ...rec,
+          uploadStatus: rec.uploadStatus === 'uploading' ? 'pending' : (rec.uploadStatus ?? 'pending') // Reset 'uploading' only
+        }));
+        recordingsWithResetStatus.sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
+        setAllRecordings(recordingsWithResetStatus);
+        console.log(`HomeScreen: Loaded ${recordingsWithResetStatus.length} total recordings.`);
       } else {
         console.error("HomeScreen: getPendingRecordings returned non-array:", storedRecordings);
         setAllRecordings([]);
@@ -124,16 +132,11 @@ export default function HomeScreen() {
     }
   }, []);
 
+
   const loadParticipantCount = useCallback(async () => {
     try {
       const participants = await getAllParticipants();
-      // Ensure we have a valid array of participants
-      if (Array.isArray(participants)) {
-        setParticipantCount(participants.length);
-      } else {
-        console.error("HomeScreen: getAllParticipants returned non-array:", participants);
-        setParticipantCount(0);
-      }
+      setParticipantCount(Array.isArray(participants) ? participants.length : 0);
     } catch (error) {
       console.error("HomeScreen: Error loading participant count:", error);
       setParticipantCount(0);
@@ -196,19 +199,19 @@ export default function HomeScreen() {
       await loadParticipantCount();
 
       if (shouldEnterSetup) {
-        // Check if we have any participants already
+        setIsSetupMode(true); // Enter setup flow
         const allExistingParticipants = await getAllParticipants();
         if (Array.isArray(allExistingParticipants) && allExistingParticipants.length > 0) {
-          // If we have participants, go to select screen instead
-          setViewMode('select-participant');
+          console.log("HomeScreen: Existing participants found, showing selection screen.");
+          setViewMode('select-participant'); // Show selection screen if participants exist
         } else {
-          // Otherwise go to create screen
-          setViewMode('create-participant');
+          console.log("HomeScreen: No participants exist, showing creation screen.");
+          setViewMode('create-participant'); // Show creation screen if none exist
         }
-        setIsSetupMode(true);
       } else {
-        setIsSetupMode(false);
-        setViewMode('participant');
+        console.log("HomeScreen: Setting view mode to participant.");
+        setIsSetupMode(false); // Not in setup flow
+        setViewMode('participant'); // Show participant view
       }
 
       await loadAllRecordings();
@@ -237,22 +240,14 @@ export default function HomeScreen() {
   }, []);
 
   const unloadPlaybackSound = useCallback(async () => {
-    console.log("HomeScreen: Unloading playback sound...");
     if (playbackState.sound) {
-      try {
-        await playbackState.sound.unloadAsync();
-      } catch (e) {
-        console.error("Unload error:", e);
-      }
-
-      // Update state object properties
+      try { await playbackState.sound.unloadAsync(); }
+      catch (e) { console.error("Unload error:", e); }
       playbackState.sound = null;
       playbackState.status = 'idle';
       playbackState.currentUri = null;
       playbackState.isActive = false;
-
-      // Update UI
-      updatePlaybackUI();
+      updatePlaybackUI(); // Trigger UI update
     }
   }, [playbackState, updatePlaybackUI]);
 
@@ -294,7 +289,6 @@ export default function HomeScreen() {
     playbackState.isActive = true;
     updatePlaybackUI();
 
-    // Rest of the function remains the same but using playbackState...
     try {
       // Configure audio mode
       await Audio.setAudioModeAsync({
@@ -302,9 +296,9 @@ export default function HomeScreen() {
         playsInSilentModeIOS: true,
         interruptionModeIOS: InterruptionModeIOS.DoNotMix,
         interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-        shouldDuckAndroid: true,  // Added with default
-        playThroughEarpieceAndroid: false,  // Added with default
-        staysActiveInBackground: false,     // Added with default
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+        staysActiveInBackground: false,
       });
 
       // Create and play the sound
@@ -322,8 +316,6 @@ export default function HomeScreen() {
         }
       );
 
-      // Update refs
-      // At the end:
       playbackState.sound = sound;
       playbackState.status = 'playing';
       updatePlaybackUI();
@@ -337,7 +329,7 @@ export default function HomeScreen() {
   }, [triggerHaptic, unloadPlaybackSound, verifyFileExists, updatePlaybackUI]);
 
   const handleDeleteRecording = useCallback((id: string, promptId: string) => {
-    if (isDeletingAll) return;
+    if (isDeletingAll || isUploading) return; // Prevent delete during other operations
 
     triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
     Alert.alert(
@@ -346,12 +338,11 @@ export default function HomeScreen() {
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Delete",
-          style: "destructive",
+          text: "Delete", style: "destructive",
           onPress: async () => {
-            setIsDeletingId(id);
+            setIsDeletingId(id); // Show spinner on the item
             try {
-              const deleted = await deletePendingRecordingById(id);
+              const deleted = await deletePendingRecordingById(id); // Deletes from storage & file system
               if (deleted) {
                 setAllRecordings(prev => prev.filter(rec => rec.id !== id));
                 console.log(`HomeScreen: Deleted recording ${id}`);
@@ -370,10 +361,10 @@ export default function HomeScreen() {
         },
       ]
     );
-  }, [isDeletingAll, triggerHaptic, loadAllRecordings]);
+  }, [isDeletingAll, isUploading, triggerHaptic, loadAllRecordings]);
 
   const handleDeleteAll = useCallback(() => {
-    if (isDeletingAll || displayedRecordings.length === 0) return;
+    if (isDeletingAll || isUploading || displayedRecordings.length === 0) return;
 
     triggerHaptic(Haptics.ImpactFeedbackStyle.Heavy);
 
@@ -390,31 +381,27 @@ export default function HomeScreen() {
     Alert.alert(title, message, [
       { text: "Cancel", style: "cancel" },
       {
-        text: buttonText,
-        style: "destructive",
+        text: buttonText, style: "destructive",
         onPress: async () => {
-          console.log(`HomeScreen: Starting Delete All process (Mode: ${viewMode})...`);
           setIsDeletingAll(true);
-
-          // Make sure to stop playback when deleting recordings
           await unloadPlaybackSound();
 
           let result = { deletedCount: 0, failedCount: 0 };
-
           try {
             if (isParticipantView && participantDetails?.code) {
               result = await deleteAllRecordingsForParticipant(participantDetails.code);
+              setAllRecordings(prev => prev.filter(r => r.participantCode !== participantDetails.code));
             } else {
               result = await deleteAllDeviceRecordings();
+              setAllRecordings([]);
             }
           } catch (error) {
             console.error(`HomeScreen: Error during deleteAll call (Mode: ${viewMode}):`, error);
             result.failedCount = count;
+            await loadAllRecordings();
+          } finally {
+            setIsDeletingAll(false);
           }
-
-          console.log(`HomeScreen: Delete All finished. Deleted: ${result.deletedCount}, Failed: ${result.failedCount}`);
-          await loadAllRecordings();
-          setIsDeletingAll(false);
 
           let alertMessage = `${result.deletedCount} recording(s) deleted successfully.`;
           if (result.failedCount > 0) {
@@ -424,24 +411,30 @@ export default function HomeScreen() {
         },
       },
     ]);
-  }, [isDeletingAll, displayedRecordings, viewMode, participantDetails, triggerHaptic, loadAllRecordings, unloadPlaybackSound]);
+  }, [
+    isDeletingAll, isUploading, displayedRecordings, viewMode, participantDetails,
+    triggerHaptic, loadAllRecordings, unloadPlaybackSound
+  ]);
 
 
   const handleUploadComplete = useCallback(async (response: UploadResponse) => {
-    if (response.progress?.is_complete) {
-
-      if (!participantDetails?.code) return
-      // Update the participant's completion status
-      const updatedDetails = {
+    if (response.progress?.is_complete && participantDetails) {
+      const updatedDetails: ParticipantDetails = {
         ...participantDetails,
-        recordings_complete: true,
-        total_recordings: response.progress.total_recordings
+        progress: response.progress
       };
-      await saveParticipantDetails(updatedDetails);
       setParticipantDetails(updatedDetails);
+      await saveParticipantDetails(updatedDetails);
+      console.log(`[UploadComplete] Participant ${participantDetails.code} completion status updated.`);
+    } else if (participantDetails && response.progress) {
+      const updatedDetails: ParticipantDetails = {
+        ...participantDetails,
+        progress: response.progress
+      };
+      setParticipantDetails(updatedDetails);
+      await saveParticipantDetails(updatedDetails);
     }
-  }, [participantDetails]);
-
+  }, [participantDetails, saveParticipantDetails]);
 
 
   const handleUploadAll = useCallback(async () => {
@@ -453,104 +446,100 @@ export default function HomeScreen() {
       Alert.alert("Setup Needed", "Participant details are not set.");
       return;
     }
+    if (isUploading) {
+      console.log("[Upload] Upload already in progress.");
+      return;
+    }
 
     triggerHaptic();
     await checkNetwork();
 
     if (!networkAvailable) {
       Alert.alert("Offline", "No internet connection available for upload.");
-      return; // Exit early if offline
+      return;
     }
 
-    const toUpload = displayedRecordings.filter(rec => !rec.uploaded);
+    const toUpload = displayedRecordings.filter(rec => !rec.uploaded && rec.uploadStatus !== 'failed');
 
     if (toUpload.length === 0) {
       Alert.alert("Up to Date", `No recordings waiting for upload for ${participantDetails.code}.`);
-      return; // Exit early if nothing to upload
+      return;
     }
 
-    // --- Set Loading State AFTER initial checks ---
-    if (isUploading) return; // Prevent double uploads
     setIsUploading(true);
-    Alert.alert("Upload Started", `Attempting to upload ${toUpload.length} recording(s) for ${participantDetails.code}...`);
+    setUploadProgress({ current: 0, total: toUpload.length });
 
     let successCount = 0;
     let failCount = 0;
-    // --- REMOVED latestProgress definition here, handleUploadComplete manages state ---
-    // let latestProgress: RecordingProgress | undefined;
 
-    // --- Use try...finally to guarantee state reset ---
     try {
-      for (const recordingMeta of toUpload) {
+      console.log(`[Upload] Starting upload for ${toUpload.length} recordings...`);
+
+      for (let i = 0; i < toUpload.length; i++) {
+        const recordingMeta = toUpload[i];
+        setUploadingItemId(recordingMeta.id);
+        setUploadProgress({ current: i + 1, total: toUpload.length });
+
+        setAllRecordings(prev => prev.map(rec =>
+          rec.id === recordingMeta.id ? { ...rec, uploadStatus: 'uploading' } : rec
+        ));
+
         try {
           const fileExists = await verifyFileExists(recordingMeta.localUri);
           if (!fileExists) {
             console.error(`[Upload] File missing, skipping: ${recordingMeta.localUri}`);
             failCount++;
-            continue; // Skip this file
+            setAllRecordings(prev => prev.map(rec =>
+              rec.id === recordingMeta.id ? { ...rec, uploadStatus: 'failed' } : rec
+            ));
+            continue;
           }
 
-          console.log(`[Upload] Uploading ${recordingMeta.id}...`);
-          const uploadResult = await uploadRecording(recordingMeta); // uploadResult is UploadResponse | null
-          console.log(`Upload Response for ${recordingMeta.id}:`, uploadResult);
+          console.log(`[Upload] Uploading ${i + 1}/${toUpload.length}: ${recordingMeta.id}...`);
+          const uploadResult = await uploadRecording(recordingMeta);
+          console.log(`[Upload] Response for ${recordingMeta.id}:`, uploadResult);
 
           if (uploadResult) {
-            console.log(`[Upload] Success for ${recordingMeta.id}`);
             successCount++;
+            setAllRecordings(prev => prev.map(rec =>
+              rec.id === recordingMeta.id ? { ...rec, uploaded: true, uploadStatus: 'pending' } : rec
+            ));
             await updateRecordingUploadedStatus(recordingMeta.id, true);
-            // --- *** CALL handleUploadComplete HERE *** ---
-            await handleUploadComplete(uploadResult); // Process the response
-            // --- *************************************** ---
-
-            // No need to track latestProgress manually anymore
-            // latestProgress = uploadResult.progress;
+            await handleUploadComplete(uploadResult);
           } else {
-            console.error(`[Upload] Failed for ${recordingMeta.id} (uploadRecording returned null)`);
             failCount++;
+            setAllRecordings(prev => prev.map(rec =>
+              rec.id === recordingMeta.id ? { ...rec, uploadStatus: 'failed' } : rec
+            ));
           }
-
         } catch (error) {
           console.error(`[Upload] Unexpected error processing recording ${recordingMeta.id}:`, error);
           failCount++;
+          setAllRecordings(prev => prev.map(rec =>
+            rec.id === recordingMeta.id ? { ...rec, uploadStatus: 'failed' } : rec
+          ));
         }
-      } // End of for loop
+      }
 
-      // --- Remove redundant state update here, handleUploadComplete does it ---
-      // if (latestProgress && participantDetails) { ... }
-
-      // --- Show final summary alert AFTER the loop ---
-      let finalMessage = `${successCount} uploaded successfully.`;
+      let finalMessage = `${successCount} recording(s) uploaded successfully.`;
       if (failCount > 0) {
-        finalMessage += ` ${failCount} failed. Check logs for details.`;
+        finalMessage += ` ${failCount} failed. Check logs or try again later.`;
       }
       Alert.alert("Upload Complete", finalMessage);
-
-      // --- Reload recordings AFTER the loop and alert ---
-      await loadAllRecordings(); // Refresh the list to show updated 'uploaded' status
 
     } catch (outerError) {
       console.error("[Upload] Critical error during upload process:", outerError);
       Alert.alert("Upload Error", "An unexpected error occurred during the upload process.");
-      await loadAllRecordings();
     } finally {
-      console.log("[Upload] Process finished. Resetting loading state.");
+      console.log("[Upload] Process finished. Resetting states.");
       setIsUploading(false);
+      setUploadingItemId(null);
+      setUploadProgress(null);
     }
   }, [
-    // Add handleUploadComplete to dependencies
-    handleUploadComplete,
-    viewMode,
-    participantDetails,
-    networkAvailable,
-    displayedRecordings,
-    isUploading,
-    checkNetwork,
-    triggerHaptic,
-    loadAllRecordings,
-    verifyFileExists,
-    setParticipantDetails, // Still needed by handleUploadComplete
-    saveParticipantDetails, // Still needed by handleUploadComplete
-    updateRecordingUploadedStatus
+    viewMode, participantDetails, networkAvailable, displayedRecordings, isUploading,
+    triggerHaptic, checkNetwork, verifyFileExists, handleUploadComplete,
+    setAllRecordings, updateRecordingUploadedStatus, saveParticipantDetails
   ]);
 
 
@@ -559,46 +548,47 @@ export default function HomeScreen() {
     setIsLoading(true);
     try {
       if (!details || !isValidCode(details.code)) {
-        throw new Error("Invalid participant code provided to handleSetupcomplete.");
+        throw new Error("Invalid participant code provided.");
       }
 
-
-      const detailsToSave: ParticipantDetails = {
-        ...details,
-        progress: details.progress ?? { total_recordings: 0, total_required: EXPECTED_TOTAL_RECORDINGS, is_complete: false }
-      };
-
-      const savedSuccessfully = await saveParticipantDetails(detailsToSave);
+      const savedSuccessfully = await saveParticipantDetails(details);
       if (!savedSuccessfully) {
         throw new Error("Failed to save participant details to storage.");
       }
-      console.log("HomeScreen: [handleSetupComplete] Participant details saved.");
 
-      setParticipantDetails(detailsToSave);
+      setParticipantDetails(details);
       setIsSetupMode(false);
       setViewMode('participant');
       await loadAllRecordings();
       await loadParticipantCount();
-      console.log("HomeScreen: [handleSetupComplete] Setup process complete. and view updated");
+      console.log("HomeScreen: [handleSetupComplete] Setup process complete.");
+
     } catch (error: any) {
       console.error("HomeScreen: [handleSetupComplete] Error:", error);
       Alert.alert("Error", `Failed to finalize setup: ${error.message || 'Unknown error'}`);
+    } finally {
       setIsLoading(false);
     }
-  }, [loadAllRecordings, loadParticipantCount, handleUploadComplete]);
+  }, [loadAllRecordings, loadParticipantCount]);
 
 
 
-  const handleParticipantSelected = useCallback((participant: ParticipantDetails | null) => {
+  const handleParticipantSelected = useCallback(async (participant: ParticipantDetails | null) => {
     if (participant) {
-      setParticipantDetails(participant);
-      setIsSetupMode(false);
-      setViewMode('participant');
-      loadAllRecordings()
+      const saved = await saveParticipantDetails(participant);
+      if (saved) {
+        setParticipantDetails(participant);
+        setIsSetupMode(false);
+        setViewMode('participant');
+        console.log(`HomeScreen: Participant ${participant.code} selected.`);
+      } else {
+        Alert.alert("Error", "Could not save participant selection.");
+      }
     } else {
-      setViewMode('select-participant')
+      setParticipantDetails(null);
+      setViewMode('select-participant');
     }
-  }, [loadAllRecordings]);
+  }, []);
 
   const handleCreateNewParticipant = useCallback(() => {
     setViewMode('create-participant');
@@ -607,74 +597,92 @@ export default function HomeScreen() {
 
   const goToSettings = useCallback(() => {
     setViewMode('settings');
-    setSettingsTabIndex(0); // Default to All Recordings tab
+    setSettingsTabIndex(0);
     triggerHaptic();
   }, [triggerHaptic]);
 
 
-
-  // Redirect if welcome hasn't been seen
-  // if (!isCheckingWelcome && !hasSeenWelcome) {
-  //   return <Redirect href="/welcome" />;
-  // }
-
-
   // --- Effects ---
   useEffect(() => {
-
     let title = "Twi Speech Recorder";
-    if (viewMode === 'settings') {
-      title = "Settings & Management";
-    } else if (isSetupMode) {
+    if (viewMode === 'settings') title = "Settings & Management";
+    else if (isSetupMode) {
       if (viewMode === 'select-participant') title = "Select Participant";
       else if (viewMode === 'create-participant') title = "New Participant";
       else if (viewMode === 'edit-participant') title = `Edit: ${participantDetails?.code ?? 'Participant'}`;
       else title = "Participant Setup";
-    } else if (participantDetails?.code) {
-      title = `Recordings (${participantDetails.code})`;
-    }
+    } else if (participantDetails?.code) title = `Recordings (${participantDetails.code})`;
     navigation.setOptions({ title });
   }, [navigation, participantDetails, viewMode, isSetupMode]);
 
-  const renderProgress = useCallback((recordingsForParticipant: RecordingMetadata[]) => {
-    // Only show in participant view and if details exist
-    if (viewMode !== 'participant' || !participantDetails?.progress) return null;
+  // --- UPDATED: renderProgress ---
+  const renderProgress = useCallback((
+    recordingsForParticipant: RecordingMetadata[],
+    uploadProgressState: UploadProgressState
+  ) => {
+    if (viewMode !== 'participant' || !participantDetails) return null;
 
-    const localTotalRecordings = recordingsForParticipant.length;
+    const localTotal = recordingsForParticipant.length;
+    const localRequired = EXPECTED_TOTAL_RECORDINGS;
+    const isLocallyComplete = localTotal >= localRequired;
 
-    const totalRequired = participantDetails.progress?.total_required ?? EXPECTED_TOTAL_RECORDINGS;
+    // Calculate uploaded count based on current state
+    const uploadedCount = recordingsForParticipant.filter(rec => rec.uploaded).length;
 
-    const isLocallyComplete = totalRequired > 0 && localTotalRecordings >= totalRequired;
-
-    // Prevent division by zero, default to 0% if total_required is missing or zero
-    const percentage = totalRequired > 0
-      ? Math.min(100, Math.round((localTotalRecordings / totalRequired) * 100))
+    const localPercentage = localRequired > 0
+      ? Math.min(100, Math.round((localTotal / localRequired) * 100))
       : 0;
-    console.log(`Percentage: ${percentage}%`);
+
+    const uploadedPercentage = localRequired > 0
+      ? Math.min(100, Math.round((uploadedCount / localRequired) * 100))
+      : 0;
+
+    // Use server progress primarily for completion flag, if available
+    const serverProgress = participantDetails.progress;
+    const isServerComplete = serverProgress?.is_complete ?? false;
+    const serverTotal = serverProgress?.total_recordings ?? -1; // Use -1 to indicate unavailable
+
+    const displayPercentage = localPercentage; // Always show local percentage textually
+
+    let progressText = `${localTotal} / ${localRequired} Recorded`;
+    if (uploadedCount > 0 && !isUploading) { // Show uploaded count when not actively uploading
+      progressText += ` (${uploadedCount} Uploaded)`;
+    } else if (isUploading && uploadProgressState) {
+      // Could potentially show upload progress here too, but might be redundant with button
+      // progressText = `Uploading ${uploadProgressState.current}/${uploadProgressState.total}...`;
+    }
 
     return (
-      <View
-      // className="bg-white dark:bg-neutral-800 rounded-lg p-4 mb-4 mx-4 border border-neutral-200 dark:border-neutral-700 shadow-sm"
-      >
-        {/* <Text style={{ color: textColor }} className="text-lg font-semibold mb-2 text-center">
-          Recording Progress
-        </Text> */}
-        <View className="flex-row justify-between mb-2 px-1">
+      <View>
+        {/* Progress Text */}
+        <View className="flex-row justify-between mb-1 px-1">
           <Text style={{ color: secondaryTextColor }} className="text-sm">
-            {localTotalRecordings} / {totalRequired} Prompts Recorded
+            {progressText}
           </Text>
           <Text style={{ color: isLocallyComplete ? successColor : primaryColor }} className="text-sm font-bold">
-            {percentage}%
+            {displayPercentage}%
           </Text>
         </View>
-        <View className="h-2.5 bg-neutral-200 dark:bg-neutral-700 rounded-full overflow-hidden">
+
+        {/* Progress Bar Container */}
+        <View className="h-3 bg-neutral-200 dark:bg-neutral-700 rounded-full overflow-hidden relative">
+          {/* Local Progress Bar (Green) - Base layer */}
           <View
-            className={`h-full rounded-full ${isLocallyComplete ? 'bg-success' : 'bg-primary dark:bg-primary-dark'}`}
-            style={{ width: `${percentage}%` }}
+            className="absolute top-0 left-0 bottom-0 bg-success dark:bg-success-dark rounded-full"
+            style={{ width: `${localPercentage}%` }}
           />
+          {/* Uploaded Progress Bar (Blue) - Overlay */}
+          {uploadedPercentage > 0 && ( // Only show if some are uploaded
+            <View
+              className="absolute top-0 left-0 bottom-0 bg-primary dark:bg-primary-dark rounded-full"
+              style={{ width: `${uploadedPercentage}%` }}
+            />
+          )}
         </View>
-        {isLocallyComplete && (
-          <View className="flex-row items-center justify-center mt-2.5">
+
+        {/* Completion Text */}
+        {isLocallyComplete && !isUploading && ( // Hide local completion message during upload
+          <View className="flex-row items-center justify-center mt-2">
             <MaterialCommunityIcons name="check-decagram" size={18} color={successColor} />
             <Text style={{ color: successColor }} className="ml-1.5 text-center font-semibold">
               All required prompts recorded!
@@ -682,14 +690,24 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {participantDetails.progress?.is_complete && !isLocallyComplete && (
+        {/* Server Completion Mismatch Warning */}
+        {isServerComplete && !isLocallyComplete && !isUploading && (
           <Text style={{ color: warningColor }} className="text-xs text-center mt-1 italic">
-            (Backend reports completion, awaiting sync/upload)
+            (Backend reports completion, upload needed)
           </Text>
         )}
+        {/* Server Total Info (Optional, uncomment if useful) */}
+        {/* {serverTotal !== -1 && serverTotal !== localTotal && (
+           <Text style={{ color: secondaryTextColor }} className="text-xs text-center mt-1">
+             (Server sync: {serverTotal} recordings)
+           </Text>
+         )} */}
       </View>
     );
-  }, [viewMode, participantDetails, textColor, secondaryTextColor, primaryColor, successColor, warningColor, EXPECTED_TOTAL_RECORDINGS]);
+  }, [
+    viewMode, participantDetails, textColor, secondaryTextColor, primaryColor, successColor, warningColor,
+    EXPECTED_TOTAL_RECORDINGS, isUploading // Added isUploading dependency
+  ]);
 
   useEffect(() => {
     loadInitialData();
@@ -702,15 +720,11 @@ export default function HomeScreen() {
       if (!isSetupMode) {
         console.log("HomeScreen: Focus detected, reloading data...");
         loadInitialData();
-
-        // Always unload playback on focus - don't resume playing when coming back to screen
         unloadPlaybackSound();
       } else {
         console.log("HomeScreen: Focus detected, but in setup mode - skipping reload.");
       }
-
       return () => {
-        // Cleanup on unfocus
         unloadPlaybackSound();
       };
     }, [isSetupMode, loadInitialData, unloadPlaybackSound])
@@ -733,7 +747,6 @@ export default function HomeScreen() {
         setIsCheckingWelcome(false);
       }
     };
-
     checkWelcomeScreen();
   }, []);
 
@@ -742,9 +755,8 @@ export default function HomeScreen() {
   // --- Memos ---
   const pendingToUploadCount = useMemo(() => {
     if (viewMode !== 'participant' || !participantDetails) return 0;
-    // Filter recordings for the current participant that are not uploaded
-    return displayedRecordings.filter(rec => !rec.uploaded).length;
-  }, [displayedRecordings, viewMode, participantDetails]); // Depends on currently displayed recordings
+    return displayedRecordings.filter(rec => !rec.uploaded && rec.uploadStatus !== 'failed').length;
+  }, [displayedRecordings, viewMode, participantDetails]);
 
   const canUpload = useMemo(() => (
     !isUploading &&
@@ -766,16 +778,14 @@ export default function HomeScreen() {
   }
 
   if (!hasSeenWelcome) {
-    // AsyncStorage.setItem(WELCOME_SEEN_KEY, 'false');
-    // AsyncStorage.setItem(ALL_PARTICIPANTS_KEY, '')
-    // AsyncStorage.setItem(PARTICIPANT_DETAILS_KEY, '')
     router.replace('/welcome');
+    return null;
   }
 
-  // Dependencies for the progress display
 
   // --- Render Methods ---
   const renderSettingsScreen = () => {
+    // ... (keep existing settings screen rendering logic)
     return (
       <>
         <View className="bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
@@ -830,7 +840,7 @@ export default function HomeScreen() {
           <FlatList
             data={allRecordings}
             keyExtractor={(item) => item.id || String(Math.random())}
-            extraData={[playbackUiVersion, isDeletingId, isDeletingAll]}
+            extraData={[playbackUiVersion, isDeletingId, isDeletingAll, uploadingItemId]} // Add uploadingItemId
             renderItem={({ item }) => (
               <RecordingListItem
                 recording={item}
@@ -838,7 +848,8 @@ export default function HomeScreen() {
                 onDelete={() => handleDeleteRecording(item.id, item.promptId)}
                 isPlaying={playbackState.currentUri === item.localUri && playbackState.status === 'playing'}
                 isDeleting={isDeletingId === item.id || isDeletingAll}
-                showParticipantCode={viewMode === 'settings' ? true : viewMode === 'participant'}
+                isUploadingNow={uploadingItemId === item.id} // Pass uploading state
+                showParticipantCode={true} // Always show code in settings view
               />
             )}
             ListHeaderComponent={
@@ -863,7 +874,7 @@ export default function HomeScreen() {
 
                 <View className="bg-neutral-50 dark:bg-neutral-700/50 p-4 rounded-lg mb-4">
                   <Text className="text-sm" style={{ color: secondaryTextColor }}>
-                    This view shows all recordings stored on the device across all participants. You can play, delete individual recordings, or delete all recordings.
+                    This view shows all recordings stored on the device across all participants. You can play, delete individual recordings, or delete all recordings. Uploads must be done from the participant view.
                   </Text>
                 </View>
               </View>
@@ -904,6 +915,7 @@ export default function HomeScreen() {
   return (
     <ThemedSafeAreaView className="flex-1">
       {isSetupMode ? (
+        // ... (existing setup mode rendering logic)
         viewMode === 'select-participant' ? (
           <ParticipantSelector
             currentParticipant={participantDetails}
@@ -915,9 +927,12 @@ export default function HomeScreen() {
             onSetupComplete={handleSetupComplete}
             isNewParticipant={true}
             onCancel={() => {
-              setIsSetupMode(false)
-              setViewMode('participant')
-              { !participantDetails && setHasSeenWelcome(false) }
+              setIsSetupMode(false);
+              setViewMode('participant');
+              // If no participant exists after cancel, re-evaluate initial state
+              if (!participantDetails) {
+                loadInitialData(); // Re-check if setup is needed
+              }
             }}
           />
         ) : viewMode === 'edit-participant' ? (
@@ -925,18 +940,18 @@ export default function HomeScreen() {
             onSetupComplete={handleSetupComplete}
             initialDetails={participantDetails}
             onCancel={() => {
-              setViewMode('participant')
-              setIsSetupMode(false)
+              setViewMode('participant');
+              setIsSetupMode(false);
             }} />
         ) : null
       ) : viewMode === 'settings' ? (
         renderSettingsScreen()
       ) : (
         <>
-          {(isUploading || isDeletingAll) && (
+          {(isDeletingAll) && (
             <View style={styles.overlay}>
               <ActivityIndicator size="large" color="#FFFFFF" />
-              <Text style={styles.overlayText}>{isUploading ? 'Uploading...' : 'Deleting...'}</Text>
+              <Text style={styles.overlayText}>Deleting...</Text>
             </View>
           )}
 
@@ -944,10 +959,11 @@ export default function HomeScreen() {
             data={displayedRecordings}
             keyExtractor={(item) => item.id || String(Math.random())}
             extraData={[
-              playbackUiVersion, // Use the version counter for minimal re-renders
+              playbackUiVersion,
               isDeletingId,
               isDeletingAll,
               participantDetails?.progress,
+              uploadingItemId,
             ]}
             renderItem={({ item }) => (
               <RecordingListItem
@@ -956,16 +972,15 @@ export default function HomeScreen() {
                 onDelete={() => handleDeleteRecording(item.id, item.promptId)}
                 isPlaying={playbackState.currentUri === item.localUri && playbackState.status === 'playing'}
                 isDeleting={isDeletingId === item.id || isDeletingAll}
-                showParticipantCode={false /*viewMode === 'participant' ? true : false*/}
+                isUploadingNow={uploadingItemId === item.id}
+                showParticipantCode={false}
               />
             )}
             ListHeaderComponent={
               <View className="px-4 pt-4 pb-2">
-                {/* Top Bar with Cog */}
+                {/* Top Bar */}
                 <View className="flex-row items-center justify-between mb-4 px-1">
-                  {/* Placeholder to balance the cog icon */}
                   <View style={{ width: 34 }} />
-                  {/* Participant Code Display (moved here for better centering) */}
                   <Text
                     className="text-xl font-semibold text-neutral-800 dark:text-neutral-100 text-center flex-1 mx-2"
                     numberOfLines={1}
@@ -974,32 +989,21 @@ export default function HomeScreen() {
                     {participantDetails?.code ?? 'Loading...'}
                   </Text>
                   <Button
-                    title=""
-                    icon="cog-outline"
-                    iconSize={26}
-                    onPress={goToSettings}
-                    className="p-1"
-                    iconColor={iconColor || undefined}
+                    title="" icon="cog-outline" iconSize={26} onPress={goToSettings}
+                    className="p-1" iconColor={iconColor || undefined}
                   />
                 </View>
 
-
+                {/* Participant Details Card */}
                 {participantDetails && (
                   <View className="mb-3 p-4 bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700 shadow-sm">
-
                     <View className="flex-row items-center justify-between mb-1.5">
                       <Text className="text-sm font-medium text-neutral-500 dark:text-neutral-400">
                         Participant Details:
                       </Text>
                       <Button
-                        title="Edit"
-                        icon="account-edit-outline"
-                        iconColor={primaryColor || undefined}
-                        iconSize={16}
-                        onPress={() => {
-                          setIsSetupMode(true);
-                          setViewMode('edit-participant');
-                        }}
+                        title="Edit" icon="account-edit-outline" iconColor={primaryColor || undefined} iconSize={16}
+                        onPress={() => { setIsSetupMode(true); setViewMode('edit-participant'); }}
                         className="py-0.5 px-2 flex-row items-center bg-primary/10 dark:bg-primary/20 rounded-md"
                         textClassName="text-xs text-primary dark:text-primary-light ml-1 font-medium"
                       />
@@ -1011,34 +1015,31 @@ export default function HomeScreen() {
                         participantDetails.gender && `Gender: ${participantDetails.gender}`
                       ].filter(Boolean).join('  •  ') || 'No optional details provided'}
                     </Text>
+                    {/* --- Render Progress Bar --- */}
                     <View className="mt-4">
-
-                      {renderProgress(displayedRecordings)}
-                    </View>cls
+                      {/* Pass uploadProgress state to the render function */}
+                      {renderProgress(displayedRecordings, uploadProgress)}
+                    </View>
                   </View>
                 )}
 
-                {/* Progress Bar */}
-                {/* {renderProgress(displayedRecordings)} */}
-
+                {/* Recording Button */}
                 <Button
                   title={displayedRecordings.length > 0 ? 'Continue Recording' : 'Start Recording'}
                   icon="microphone-plus"
                   iconColor='#F5f5f0'
                   onPress={() => router.push('/record')}
-                  // Disable if recordings are complete for this participant
                   disabled={isDeletingAll || isUploading || participantDetails?.progress?.is_complete}
                   className={`
-                      w-full flex-row items-center justify-center py-3.5 rounded-xl shadow-md my-3
-                        ${participantDetails?.progress?.is_complete
-                      ? 'bg-neutral-400 dark:bg-neutral-600 opacity-70'
-                      : 'bg-success dark:bg-success-dark'
-                    }
-                                   `}
+                    w-full flex-row items-center justify-center py-3.5 rounded-xl shadow-md my-3
+                    ${participantDetails?.progress?.is_complete && !isUploading ? 'bg-neutral-400 dark:bg-neutral-600 opacity-70' : ''}
+                    ${!participantDetails?.progress?.is_complete && !isUploading ? 'bg-success dark:bg-success-dark' : ''}
+                    ${isUploading ? 'bg-neutral-400 dark:bg-neutral-600 opacity-70' : ''}
+                  `}
                   textClassName="text-white text-lg font-semibold ml-2 dark:text-gray-100"
-                  disabledClassName="bg-neutral-400 dark:bg-neutral-600 opacity-70" // Explicit disabled style
+                  disabledClassName="bg-neutral-400 dark:bg-neutral-600 opacity-70"
                 />
-                {participantDetails?.progress?.is_complete && (
+                {participantDetails?.progress?.is_complete && !isUploading && (
                   <Text className="text-xs text-center text-neutral-500 dark:text-neutral-400 -mt-2 mb-3">
                     All recordings completed.
                   </Text>
@@ -1049,12 +1050,11 @@ export default function HomeScreen() {
                   <Text className="text-lg font-semibold" style={{ color: textColor }}>
                     Recorded Items ({displayedRecordings.length})
                   </Text>
-                  {/* Delete All *Participant's* Recordings Button */}
                   <Button
                     title="Delete All"
                     icon={isDeletingAll ? undefined : "delete-sweep-outline"}
-                    onPress={handleDeleteAll} // Will trigger participant-specific delete in this view
-                    disabled={displayedRecordings.length === 0 || isDeletingAll || isUploading}
+                    onPress={handleDeleteAll}
+                    disabled={!canDeleteAllDisplayed}
                     isLoading={isDeletingAll}
                     className="bg-danger/10 dark:bg-danger/25 px-3 py-1.5 rounded-lg flex-row items-center justify-center"
                     textClassName="text-danger dark:text-danger-light text-sm font-medium ml-1"
@@ -1072,7 +1072,7 @@ export default function HomeScreen() {
                   No recordings yet.
                 </Text>
                 <Text style={[styles.emptySubText, { color: secondaryTextColor }]}>
-                  Press "Start Recording" above to begin.
+                  Press "{displayedRecordings.length > 0 ? 'Continue Recording' : 'Start Recording'}" above to begin.
                 </Text>
               </View>
             }
@@ -1086,10 +1086,10 @@ export default function HomeScreen() {
               />
             }
             className="flex-1 px-2"
-            contentContainerStyle={{ paddingBottom: 120 }} // Ensure space for upload button
+            contentContainerStyle={{ paddingBottom: 120 }}
           />
 
-          {/* Upload Button Area (Only in Participant View) */}
+          {/* Upload Button Area */}
           <View className="absolute bottom-0 left-0 right-0 p-4 border-t border-neutral-200 bg-white/95 shadow-lg dark:bg-neutral-800/95 dark:border-neutral-700">
             <View className="flex-row justify-between items-center mb-2.5">
               <Text className="text-base" style={{ color: textColor }}>
@@ -1103,7 +1103,11 @@ export default function HomeScreen() {
               </View>
             </View>
             <Button
-              title={isUploading ? "Uploading..." : `Upload Pending (${pendingToUploadCount})`}
+              title={
+                isUploading && uploadProgress
+                  ? `Uploading ${uploadProgress.current} / ${uploadProgress.total}...`
+                  : `Upload Pending (${pendingToUploadCount})`
+              }
               icon={isUploading ? undefined : "cloud-upload-outline"}
               onPress={handleUploadAll}
               disabled={!canUpload}
@@ -1113,6 +1117,14 @@ export default function HomeScreen() {
               iconColor="white"
               disabledClassName="bg-primary-light dark:bg-primary/50 opacity-70"
             />
+            {isUploading && uploadProgress && uploadProgress.total > 0 && (
+              <View className="mt-2 h-1.5 bg-neutral-200 dark:bg-neutral-600 rounded-full overflow-hidden">
+                <View
+                  className="h-full bg-primary dark:bg-primary-dark rounded-full" // Use primary color for active upload progress
+                  style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                />
+              </View>
+            )}
           </View>
         </>
       )}

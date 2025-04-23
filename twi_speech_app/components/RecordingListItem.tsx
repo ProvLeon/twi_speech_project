@@ -10,11 +10,13 @@ interface RecordingListItemProps {
   onDelete: (id: string, promptId: string) => void;
   isPlaying: boolean;
   isDeleting?: boolean;
+  isUploadingNow?: boolean; // Is this specific item currently uploading?
   showParticipantCode?: boolean;
 }
 
 const formatDuration = (ms?: number): string => {
-  if (ms === undefined || ms === null || ms <= 0) return '--:--';
+  // ... (keep existing formatDuration function)
+  if (ms === undefined || ms === null || ms < 0) return '--:--'; // Handle negative just in case
   const totalSeconds = Math.round(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -27,48 +29,75 @@ export const RecordingListItem: React.FC<RecordingListItemProps> = ({
   onDelete,
   isPlaying,
   isDeleting = false,
+  isUploadingNow = false, // Default to false
   showParticipantCode = false,
 }) => {
-  const playIcon = isPlaying ? "pause-circle" : "play-circle";
-  const statusIcon = recording.uploaded ? "cloud-check-outline" : "clock-outline";
-  const statusColor = recording.uploaded ? "#10B981" : "#F59E0B"; // Green / Amber
-  const statusText = recording.uploaded ? 'Uploaded' : 'Pending';
-  const statusColorClass = recording.uploaded ? "text-success" : "text-warning-dark dark:text-warning";
-
-  // Use themed colors for consistency
+  // --- Themed Colors ---
   const textColor = useThemeColor({}, 'text');
   const secondaryTextColor = useThemeColor({ light: '#6B7280', dark: '#9CA3AF' }, 'text');
-  const iconColor = useThemeColor({}, 'icon');
+  const iconColor = useThemeColor({}, 'icon'); // General icon color
   const playButtonBg = useThemeColor({ light: 'rgba(79, 70, 229, 0.1)', dark: 'rgba(99, 102, 241, 0.2)' }, 'background');
-  const playIconColor = recording.uploaded
-    ? useThemeColor({ light: '#9CA3AF', dark: '#6B7280' }, 'icon')
-    : useThemeColor({ light: '#4F46E5', dark: '#C7D2FE' }, 'tint');
-  const backgroundColor = useThemeColor({ light: '#F3F4F6', dark: '#374151' }, 'background');
+  const dangerColor = useThemeColor({}, 'danger');
+  const primaryColor = useThemeColor({}, 'tint');
+  const successColor = useThemeColor({}, 'success');
+  const warningColor = useThemeColor({}, 'warning');
+  const disabledColor = useThemeColor({ light: '#9CA3AF', dark: '#6B7280' }, 'icon'); // Color for disabled elements/text
+  const backgroundColor = useThemeColor({ light: '#FFFFFF', dark: '#1F2937' }, 'card'); // Use card color
+
+
+  // --- Determine Status ---
+  let statusIcon: keyof typeof MaterialCommunityIcons.glyphMap | null = null; // Use null for ActivityIndicator case
+  let statusColor = warningColor; // Default: Pending
+  let statusText = 'Pending Upload';
+  let statusTextColor = warningColor; // Default text color
+
+  if (isUploadingNow) {
+    statusIcon = null; // Will render ActivityIndicator instead
+    statusColor = primaryColor;
+    statusText = 'Uploading...';
+    statusTextColor = primaryColor;
+  } else if (recording.uploadStatus === 'failed') {
+    statusIcon = "alert-circle-outline";
+    statusColor = dangerColor;
+    statusText = 'Upload Failed';
+    statusTextColor = dangerColor;
+  } else if (recording.uploaded) {
+    statusIcon = "cloud-check-outline";
+    statusColor = successColor;
+    statusText = 'Uploaded';
+    statusTextColor = successColor;
+  }
+  // else: Keep default pending values
+
+  // --- Determine Playability & Button State ---
+  const canPlay = !recording.uploaded && recording.uploadStatus !== 'failed' && !isUploadingNow && !isDeleting;
+  const playIcon = isPlaying ? "pause-circle" : "play-circle";
+  const playIconColor = canPlay ? primaryColor : disabledColor;
+  const playButtonOpacity = canPlay ? 1 : 0.5;
 
   return (
     <View
       className={`
-        bg-white rounded-xl border border-neutral-200
-        dark:bg-neutral-800 dark:border-neutral-700
+        rounded-xl border
         overflow-hidden my-1.5 mx-1 transition-opacity duration-300
         ${isDeleting ? 'opacity-40' : 'opacity-100'}
+        ${recording.uploadStatus === 'failed' ? 'border-danger/50 dark:border-danger/40' : 'border-neutral-200 dark:border-neutral-700'}
       `}
-      style={styles.itemContainer}
+      style={[styles.itemContainer, { backgroundColor }]} // Apply themed background
     >
       <View className="flex-row items-center p-3 space-x-3">
         {/* Play/Pause Button */}
         <TouchableOpacity
-          onPress={() => onPlay(recording.localUri)}
-          disabled={recording.uploaded ? true : isDeleting}
+          onPress={() => canPlay && onPlay(recording.localUri)}
+          disabled={!canPlay} // Disable based on combined state
           style={{
             backgroundColor: playButtonBg,
-            opacity: recording.uploaded ? 0.5 : 1,
+            opacity: playButtonOpacity, // Dim if cannot play
             width: 40,
             height: 40,
             alignItems: 'center',
             justifyContent: 'center',
             borderRadius: 20,
-            padding: 4
           }}
           activeOpacity={0.7}
         >
@@ -87,6 +116,7 @@ export const RecordingListItem: React.FC<RecordingListItemProps> = ({
             numberOfLines={2}
             style={{ color: textColor }}
           >
+            {/* Use promptText if available, otherwise format promptId */}
             {recording.promptText || recording.promptId.replace(/_/g, ' ')}
           </Text>
 
@@ -94,14 +124,20 @@ export const RecordingListItem: React.FC<RecordingListItemProps> = ({
           <View className="flex-row items-center flex-wrap gap-x-3 gap-y-1">
             {/* Status */}
             <View className="flex-row items-center">
-              <MaterialCommunityIcons
-                name={statusIcon}
-                size={16}
-                color={statusColor}
-                style={{ marginRight: 4 }}
-              />
+              {isUploadingNow ? (
+                <ActivityIndicator size="small" color={statusColor} style={{ marginRight: 4 }} />
+              ) : (
+                statusIcon && ( // Only render icon if not uploading
+                  <MaterialCommunityIcons
+                    name={statusIcon}
+                    size={16}
+                    color={statusColor}
+                    style={{ marginRight: 4 }}
+                  />
+                )
+              )}
               <Text style={{
-                color: statusColor,
+                color: statusTextColor,
                 fontSize: 12,
                 fontWeight: '500'
               }}>
@@ -114,7 +150,7 @@ export const RecordingListItem: React.FC<RecordingListItemProps> = ({
               <MaterialCommunityIcons
                 name="timer-outline"
                 size={16}
-                color={iconColor}
+                color={secondaryTextColor}
                 style={{ marginRight: 4 }}
               />
               <Text style={{
@@ -130,7 +166,7 @@ export const RecordingListItem: React.FC<RecordingListItemProps> = ({
               <View style={{
                 flexDirection: 'row',
                 alignItems: 'center',
-                backgroundColor: backgroundColor,
+                backgroundColor: useThemeColor({ light: '#E5E7EB', dark: '#374151' }, 'background'), // Use a neutral background
                 paddingHorizontal: 6,
                 paddingVertical: 2,
                 borderRadius: 4
@@ -145,7 +181,8 @@ export const RecordingListItem: React.FC<RecordingListItemProps> = ({
                   color: secondaryTextColor,
                   fontSize: 12
                 }}>
-                  {recording.participantCode.replace('TWI_Speaker_', '')}
+                  {/* Simplify code display if needed */}
+                  {recording.participantCode.replace('TWI_Speaker_', 'P')}
                 </Text>
               </View>
             )}
@@ -155,39 +192,38 @@ export const RecordingListItem: React.FC<RecordingListItemProps> = ({
         {/* Delete Button */}
         <TouchableOpacity
           onPress={() => onDelete(recording.id, recording.promptId)}
-          disabled={isDeleting}
+          disabled={isDeleting || isUploadingNow} // Also disable delete while uploading THIS item
           style={{
             padding: 8,
             alignItems: 'center',
-            justifyContent: 'center'
+            justifyContent: 'center',
+            opacity: (isDeleting || isUploadingNow) ? 0.4 : 1, // Dim if disabled
           }}
           activeOpacity={0.6}
         >
           {isDeleting ? (
-            <ActivityIndicator size="small" color="#EF4444" />
+            <ActivityIndicator size="small" color={dangerColor} />
           ) : (
             <MaterialCommunityIcons
               name="delete-outline"
               size={24}
-              color="#EF4444"
+              color={dangerColor}
             />
           )}
         </TouchableOpacity>
       </View>
-    </View >
+    </View>
   );
 };
 
-// Define styles with proper shadow properties
+// --- Styles ---
 const styles = StyleSheet.create({
   itemContainer: {
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
+    // Removed background color here, applied dynamically with themed color
+    shadowColor: '#000', // Keep shadows for depth
+    shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.15,
     shadowRadius: 1.5,
-    elevation: 2, // for Android
+    elevation: 2, // Android shadow
   },
 });

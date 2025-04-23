@@ -40,6 +40,7 @@ export interface RecordingMetadata {
   contentType: string;
   uploaded: boolean;
   recordingDuration?: number; // Added: Duration in milliseconds
+  uploadStatus?: 'pending' | 'uploading' | 'failed'; // <-- ADDED: Track individual upload state
 
   // Optional metadata (populated from ParticipantDetails)
   dialect?: string;
