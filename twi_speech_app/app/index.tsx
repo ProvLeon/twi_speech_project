@@ -31,12 +31,68 @@ import { Modal } from '@/components/Modal';
 
 const WELCOME_SEEN_KEY = 'welcomeScreenSeen_v1';
 
+interface SettingsScreenProps {
+  allRecordings: RecordingMetadata[];
+  playbackUiVersion: number;
+  isDeletingId: string | null;
+  isDeletingAll: boolean;
+  uploadingItemId: string | null;
+  canDeleteAllDisplayed: boolean;
+  playbackState: {
+    sound: Audio.Sound | null;
+    status: PlaybackStatus;
+    currentUri: string | null;
+    isActive: boolean;
+  };
+  goToParticipantView: () => void;
+  handlePlayRecording: (uri: string) => Promise<void>;
+  handleDeleteRecording: (id: string, promptId: string) => void;
+  handleDeleteAll: () => void;
+  handleParticipantSelected: (participant: ParticipantDetails | null) => Promise<void>;
+  handleCreateNewParticipant: () => void;
+  participantDetails: ParticipantDetails | null;
+  isRefreshing: boolean;
+  onRefresh: () => Promise<void>;
+  settingsTabIndex: number;
+  setSettingsTabIndex: (index: number) => void;
+}
+
+interface ParticipantScreenProps {
+  participantDetails: ParticipantDetails | null;
+  displayedRecordings: RecordingMetadata[];
+  isDeletingAll: boolean;
+  playbackUiVersion: number;
+  isDeletingId: string | null;
+  uploadingItemId: string | null;
+  handlePlayRecording: (uri: string) => Promise<void>;
+  handleDeleteRecording: (id: string, promptId: string) => void;
+  playbackState: {
+    sound: Audio.Sound | null;
+    status: PlaybackStatus;
+    currentUri: string | null;
+    isActive: boolean;
+  };
+  goToSettings: () => void;
+  renderProgress: () => React.ReactNode;
+  router: any; // Keep this as any for now since it's from expo-router
+  isUploading: boolean;
+  canDeleteAllDisplayed: boolean;
+  handleDeleteAll: () => void;
+  isRefreshing: boolean;
+  onRefresh: () => Promise<void>;
+  pendingToUploadCount: number;
+  networkAvailable: boolean;
+  canUpload: boolean;
+  handleUploadAll: () => Promise<void>;
+  uploadProgress: UploadProgressState;
+}
+
 type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'error';
 type ViewMode = 'participant' | 'settings' | 'select-participant' | 'create-participant' | 'edit-participant';
 type UploadProgressState = { current: number; total: number } | null;
 
 // Separate the settings screen into its own component to avoid conditional hooks
-const SettingsScreen = ({
+const SettingsScreen: React.FC<SettingsScreenProps> = ({
   allRecordings,
   playbackUiVersion,
   isDeletingId,
@@ -188,7 +244,7 @@ const SettingsScreen = ({
 };
 
 // Separate participant screen component
-const ParticipantScreen = ({
+const ParticipantScreen: React.FC<ParticipantScreenProps> = ({
   participantDetails,
   displayedRecordings,
   isDeletingAll,
