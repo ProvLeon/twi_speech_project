@@ -42,3 +42,7 @@ twi-speech*.json
 */.DS_Store
 ../.DS_Store
 ~$*
+*.DS_Store
+*_$*
+._twi_prompts.*
+**.xlsx

@@ -9,8 +9,8 @@ from datetime import datetime
 from .config import settings
 import pytz
 
-EXPECTED_TOTAL_RECORDINGS = 163 # Or import
-SPONTANEOUS_PROMPTS_COUNT = 8
+EXPECTED_TOTAL_RECORDINGS = 176 # Or import
+SPONTANEOUS_PROMPTS_COUNT = 12
 
 # Get timezone from config or define directly
 try:
