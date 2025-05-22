@@ -83,3 +83,4 @@ dmypy.json
 # macOS file system artifacts
 .DS_Store
 *S_Store
+*.wav
