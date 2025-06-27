@@ -1,0 +1,64 @@
+aiohttp
+aiofiles
+audiomentations
+motor
+
+# Core ML Libraries
+torch>=1.12.0
+torchaudio>=0.12.0
+torchvision>=0.13.0
+
+# Audio Processing
+librosa>=0.9.0
+soundfile>=0.10.0
+sounddevice>=0.4.6
+pydub>=0.25.0
+scipy>=1.9.0
+
+# Progress bars
+tqdm>=4.64.0
+
+# Data Processing & Analysis
+pandas>=1.4.0
+numpy<2.0,>=1.21.0
+scikit-learn>=1.1.0
+matplotlib>=3.5.0
+seaborn>=0.11.0
+editdistance>=0.5.3
+jiwer>=2.3.0
+
+# Model Training & Optimization
+tensorboard>=2.9.0
+
+# Configuration & Utilities
+json5>=0.9.0
+pathlib2>=2.3.0
+argparse>=1.4.0
+hydra-core>=1.2.0
+omegaconf>=2.2.0
+
+# Cloud & Database
+boto3>=1.28.0       # For AWS S3 / Cloudflare R2
+pymongo[srv]>=4.3.0  # For MongoDB Atlas
+
+# Performance & Memory
+# Cloud & Database
+boto3>=1.28.0       # For AWS S3 / Cloudflare R2
+pymongo[srv]>=4.3.0  # For MongoDB Atlas
+
+# Performance & Memory
+psutil>=5.9.0
+memory-profiler>=0.60.0
+
+# Optional Advanced Features (uncomment if needed)
+transformers>=4.20.0  # For transformer-based models
+datasets>=2.3.0      # For advanced dataset management
+wandb>=0.12.0         # For experiment tracking
+# optuna>=3.0.0         # For hyperparameter optimization
+# pytorch-lightning>=1.6.0  # For advanced training loops
+# accelerate>=0.12.0    # For distributed training
+
+# Development Tools (optional)
+# pytest>=7.1.0
+# black>=22.0.0
+# flake8>=4.0.0

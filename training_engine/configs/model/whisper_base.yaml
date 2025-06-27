@@ -1,0 +1,209 @@
+# Whisper Base Model Configuration for Twi Speech Recognition
+# This configuration defines the Whisper base model architecture and parameters
+
+model:
+  _target_: src.models.whisper_model.WhisperForTwiASR
+
+  # Base model selection
+  model_name: "openai/whisper-base"
+  # Alternative options:
+  # - "openai/whisper-tiny"
+  # - "openai/whisper-small"
+  # - "openai/whisper-medium"
+  # - "openai/whisper-large"
+  # - "openai/whisper-large-v2"
+  # - "openai/whisper-large-v3"
+
+  # Model architecture
+  architecture:
+    vocab_size: null # Use default Whisper vocabulary (~51865 tokens)
+    freeze_encoder: false
+    freeze_decoder: false
+    dialect_adaptation: true
+    custom_vocabulary: []
+
+  # Whisper-specific parameters
+  whisper_config:
+    # Audio processing
+    n_mels: 80
+    n_audio_ctx: 1500
+    n_audio_state: 512
+    n_audio_head: 8
+    n_audio_layer: 6
+
+    # Text processing
+    n_vocab: 51865
+    n_text_ctx: 448
+    n_text_state: 512
+    n_text_head: 8
+    n_text_layer: 6
+
+  # Generation parameters
+  generation:
+    max_length: 448
+    min_length: 1
+    num_beams: 5
+    early_stopping: true
+    length_penalty: 1.0
+    repetition_penalty: 1.2
+    temperature: 0.6
+    top_k: 50
+    top_p: 0.9
+    do_sample: false
+
+  # Training parameters
+  training:
+    # Freezing options
+    freeze_encoder: false
+    freeze_decoder: false
+
+    # Language and task
+    language: "tw" # Twi language code
+    task: "transcribe"
+
+    # Loss configuration
+    label_smoothing: 0.1
+    ignore_index: -100
+
+    # Gradient settings
+    gradient_checkpointing: true
+    use_cache: false
+
+  # Twi language adaptations
+  twi_adaptations:
+    # Dialect support
+    dialects: ["Asante", "Akuapem", "Fante"]
+    dialect_tokens: ["<asante>", "<akuapem>", "<fante>"]
+
+    # Special tokens
+    special_tokens:
+      - "<twi>"
+      - "</twi>"
+      - "<unk_twi>"
+      - "<pad_twi>"
+
+    # Phoneme awareness
+    phoneme_aware: true
+    tone_aware: true
+
+    # Code-switching support
+    code_switching: true
+    fallback_language: "en"
+
+  # Optimization settings
+  optimization:
+    # Mixed precision training
+    mixed_precision: true
+    gradient_checkpointing: true
+
+    # Memory optimization
+    attention_dropout: 0.1
+    activation_dropout: 0.1
+
+    # Regularization
+    dropout: 0.1
+    layer_norm_eps: 1e-5
+
+    # Compression techniques
+    compression:
+      # Quantization
+      quantization:
+        enabled: false
+        method: "dynamic" # dynamic, static, qat
+        dtype: "qint8"
+
+      # Pruning
+      pruning:
+        enabled: false
+        sparsity: 0.5
+        structured: false
+
+      # Distillation
+      distillation:
+        enabled: false
+        teacher_model: "openai/whisper-medium"
+        temperature: 4.0
+        alpha: 0.7
+
+# Twi language specific configurations
+twi_language:
+  # Orthography and normalization
+  orthography:
+    normalize_diacritics: true
+    case_sensitive: false
+    punctuation_handling: "keep"
+    number_handling: "spell_out"
+
+  # Phonetics and pronunciation
+  phonetics:
+    tone_marking: true
+    vowel_harmony: true
+    consonant_clusters: true
+
+  # Dialectal variations
+  dialectal_support:
+    enabled: true
+    primary_dialect: "Asante"
+    secondary_dialects: ["Akuapem", "Fante"]
+    cross_dialect_training: true
+
+  # Code-switching patterns
+  code_switching:
+    english_integration: true
+    other_languages: ["hausa", "ewe", "dagbani"]
+    switching_points: ["noun_phrases", "verb_phrases", "interjections"]
+
+# Model performance targets
+performance_targets:
+  # Accuracy metrics
+  target_wer: 0.30 # Word Error Rate < 30%
+  target_cer: 0.20 # Character Error Rate < 20%
+  target_bleu: 0.70 # BLEU Score > 70%
+
+  # Speed metrics
+  target_rtf: 0.5 # Real-time Factor < 0.5
+  max_latency_ms: 500 # Maximum latency < 500ms
+
+  # Resource usage
+  max_memory_gb: 4.0 # Maximum memory usage < 4GB
+  max_disk_space_gb: 2.0 # Maximum disk space < 2GB
+
+# Model validation and testing
+validation:
+  # Cross-validation
+  k_fold: 5
+  stratified: true
+
+  # Test sets
+  test_sets:
+    - name: "twi_common_voice"
+      weight: 0.4
+    - name: "twi_broadcast"
+      weight: 0.3
+    - name: "twi_conversational"
+      weight: 0.3
+
+  # Evaluation metrics
+  metrics:
+    primary: "wer"
+    secondary: ["cer", "bleu", "meteor"]
+    custom: ["dialect_accuracy", "code_switch_detection"]
+
+# Deployment configuration
+deployment:
+  # Export formats
+  export_formats: ["pytorch", "onnx", "torchscript"]
+
+  # Optimization for deployment
+  optimize_for_inference: true
+  batch_size_inference: 1
+
+  # Hardware targets
+  target_hardware: ["cpu", "gpu", "mobile"]
+
+  # API configuration
+  api:
+    max_audio_length: 30.0
+    supported_formats: ["wav", "mp3", "flac", "m4a"]
+    return_confidence: true
+    return_timestamps: true

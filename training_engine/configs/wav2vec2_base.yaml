@@ -1,0 +1,221 @@
+# Wav2Vec2 Base Model Configuration for Twi Speech Recognition
+# Convenience configuration file for direct loading
+
+defaults:
+  - model: wav2vec2_base
+  - data: twi_dataset
+  - training: default
+  - evaluation: default
+  - optimization: adam
+  - augmentation: basic
+  - _self_
+
+# Project Information
+project:
+  name: "twi_speech_recognition"
+  version: "1.0.0"
+  description: "Wav2Vec2 Base Model Training for Twi ASR"
+  target_wer: 0.30
+
+# Experiment Configuration
+experiment:
+  name: "wav2vec2_base_twi_asr"
+  tags: ["wav2vec2", "twi", "base", "speech_recognition"]
+  notes: "Wav2Vec2 base model training for Twi speech recognition with target WER < 30%"
+
+# Training specific overrides for Wav2Vec2 base
+training:
+  optimizer: "adamw"
+  num_epochs: 50
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 32
+  gradient_accumulation_steps: 2
+  learning_rate: 5e-5
+  warmup_steps: 1000
+  weight_decay: 0.01
+
+  # Learning rate scheduler
+  lr_scheduler:
+    type: "cosine"
+    warmup_ratio: 0.1
+    num_cycles: 0.5
+    min_lr_ratio: 0.01
+
+  # Evaluation settings
+  evaluation_strategy: "steps"
+  eval_steps: 500
+  save_strategy: "steps"
+  save_steps: 1000
+  logging_steps: 100
+
+  # Wav2Vec2 specific settings
+  freeze_feature_encoder: false
+  mask_time_prob: 0.05
+  mask_feature_prob: 0.0
+
+  # Optimization
+  max_grad_norm: 1.0
+
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 10
+    metric: "eval_wer"
+    threshold: 0.001
+    greater_is_better: false
+
+  # Model selection
+  metric_for_best_model: "eval_wer"
+  greater_is_better: false
+
+# Data configuration for Wav2Vec2
+data:
+  sample_rate: 16000
+  max_duration: 20.0
+  min_duration: 1.0
+  normalize_audio: true
+
+  # Preprocessing
+  feature_extraction:
+    n_mels: 80
+    hop_length: 160
+    win_length: 400
+
+  # Data splits
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+
+  # Augmentation for Wav2Vec2
+  augmentation:
+    enabled: true
+    noise_prob: 0.3
+    speed_perturbation: true
+    volume_perturbation: true
+
+# Model specific configuration - using fallback model to bypass compatibility issues
+model:
+  _target_: src.models.fallback_model.FallbackTwiASR
+  pretrained_model_name: "facebook/wav2vec2-base"
+
+  # Architecture
+  vocab_size: 64
+  pad_token_id: 0
+  eos_token_id: 1
+  bos_token_id: 2
+  hidden_size: 256
+
+  # CTC settings
+  ctc_loss_reduction: "mean"
+  ctc_zero_infinity: true
+
+# Logging and monitoring
+logging:
+  level: "INFO"
+  log_to_file: true
+  log_to_console: true
+
+  # Experiment tracking
+  wandb:
+    enabled: true
+    project: "twi-speech-recognition"
+    entity: null
+    tags: ["wav2vec2", "base", "twi"]
+
+  tensorboard:
+    enabled: true
+    log_dir: "experiments/tensorboard"
+
+# Evaluation configuration
+evaluation:
+  metrics: ["wer", "cer", "bleu"]
+  compute_every_n_epochs: 5
+
+  # WER calculation
+  wer:
+    ignore_case: true
+    ignore_punctuation: true
+    char_level: false
+
+  # Twi-specific evaluation
+  dialect_evaluation: true
+  confusion_matrix: true
+
+# Checkpointing
+checkpointing:
+  save_every_n_epochs: 10
+  save_best_only: false
+  save_last: true
+  save_top_k: 3
+  monitor: "val_wer"
+  mode: "min"
+
+# Hardware and performance
+hardware:
+  device: "auto" # auto, cpu, cuda, mps
+  mixed_precision: true
+  compile_model: false
+
+  # DataLoader settings
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+
+# Debugging and development
+debug:
+  enabled: false
+  dev_mode: false
+  use_sample_data: false
+  sample_size: 100
+  limit_train_batches: 100
+  limit_val_batches: 50
+  fast_dev_run: false
+
+# Reproducibility
+seed:
+  random: 42
+  numpy: 42
+  torch: 42
+  transformers: 42
+deterministic: true
+
+# Data Sources Configuration
+data_sources:
+  mongodb:
+    uri: ${oc.env:MONGODB_URI,"mongodb+srv://okantah:etc8r8eB@cluster0.8wokqzp.mongodb.net"}
+    database: ${oc.env:MONGO_DB_NAME,"twi_speech_data"}
+    collections:
+      recordings: "audio_recordings"
+      speakers: "speakers"
+
+  r2:
+    endpoint_url: ${oc.env:R2_ENDPOINT_URL,"https://fcaa3647b82e3d919e826c3aaac0e13d.r2.cloudflarestorage.com"}
+    access_key: ${oc.env:CLOUDFLARE_ACCESS_KEY_ID,"7413a16d1e434d0e81e230ed851a1e8f"}
+    secret_key: ${oc.env:CLOUDFLARE_SECRET_ACCESS_KEY,"a36ded02aefd55b39d7aa2a11c91dc4c0a4c476f43923df245fd65d0484374ac"}
+    bucket_name: ${oc.env:R2_BUCKET_NAME,"twi-speech-to-text-model"}
+
+# Paths configuration
+paths:
+  # Data directories
+  data_dir: "data"
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  cache_dir: "data/cache"
+
+  # Model directories
+  model_dir: "models"
+  pretrained_dir: "models/pretrained"
+  checkpoint_dir: "experiments/checkpoints"
+
+  # Experiment directories
+  experiment_dir: "experiments/runs"
+  log_dir: "logs"
+  tensorboard_dir: "experiments/tensorboard"
+  wandb_dir: "experiments/wandb"
+
+  # Output directories
+  output_dir: "experiments/outputs"
+  evaluation_dir: "experiments/evaluation"
+
+  # Temporary directories
+  temp_dir: "temp"

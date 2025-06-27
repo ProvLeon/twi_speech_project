@@ -1,0 +1,354 @@
+# Default Training Configuration for Twi Speech Recognition
+# Optimized for achieving WER < 30% with professional ML practices
+
+training:
+  # Training strategy
+  strategy: "supervised" # supervised, self_supervised, semi_supervised
+
+  # Optimization settings
+  optimizer: "adamw"
+  learning_rate: 5e-5
+  weight_decay: 0.01
+
+  # Learning rate scheduling
+  lr_scheduler:
+    type: "cosine_with_warmup"
+    warmup_steps: 1000
+    warmup_ratio: 0.1
+    num_cycles: 0.5
+    min_lr_ratio: 0.01
+
+  # Training duration
+  num_epochs: 50
+  max_steps: null # If set, overrides num_epochs
+
+  # Batch settings
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 16
+  gradient_accumulation_steps: 4
+  dataloader_num_workers: 4
+
+  # Evaluation settings
+  evaluation_strategy: "steps"
+  eval_steps: 500
+  eval_accumulation_steps: null
+
+  # Logging
+  logging_steps: 100
+  level: "info"
+
+  # Checkpointing
+  save_strategy: "steps"
+  save_steps: 1000
+  save_total_limit: 5
+  load_best_model_at_end: true
+
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 5
+    threshold: 0.001
+    metric: "eval_wer"
+    greater_is_better: false
+
+  # Model selection
+  metric_for_best_model: "eval_wer"
+  greater_is_better: false
+
+# Loss configuration
+loss:
+  # Primary loss
+  primary_loss: "ctc"
+  ctc_loss_reduction: "mean"
+  ctc_zero_infinity: true
+
+  # Auxiliary losses
+  auxiliary_losses:
+    # Attention loss for better alignment
+    attention_loss:
+      enabled: false
+      weight: 0.1
+
+    # Phoneme prediction loss
+    phoneme_loss:
+      enabled: false
+      weight: 0.2
+
+    # Dialect classification loss
+    dialect_loss:
+      enabled: true
+      weight: 0.05
+
+# Regularization techniques
+regularization:
+  # Dropout
+  hidden_dropout: 0.1
+  attention_dropout: 0.1
+  feat_proj_dropout: 0.0
+
+  # Layer dropout
+  layerdrop: 0.1
+
+  # Weight decay
+  weight_decay: 0.01
+
+  # Gradient clipping
+  max_grad_norm: 1.0
+
+  # Label smoothing
+  label_smoothing: 0.1
+
+# Mixed precision training
+mixed_precision:
+  enabled: true
+  fp16: true
+  fp16_opt_level: "O1"
+  fp16_full_eval: false
+  loss_scale: "dynamic"
+
+# Data loading optimization
+data_loading:
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  multiprocessing_context: "spawn"
+
+# Memory optimization
+memory_optimization:
+  gradient_checkpointing: true
+  use_cache: false
+  dataloader_pin_memory: true
+  empty_cache_steps: 100
+
+# Distributed training
+distributed:
+  # Multi-GPU training
+  multi_gpu: true
+  backend: "nccl"
+
+  # DeepSpeed configuration
+  deepspeed:
+    enabled: false
+    config_file: "configs/deepspeed/ds_config.json"
+
+  # Distributed Data Parallel
+  ddp:
+    find_unused_parameters: false
+    broadcast_buffers: true
+
+# Curriculum learning
+curriculum_learning:
+  enabled: true
+  strategy: "duration_based" # duration_based, difficulty_based, random
+
+  # Duration-based curriculum
+  duration_curriculum:
+    start_max_duration: 5.0 # seconds
+    end_max_duration: 20.0
+    increase_steps: 2000
+
+  # Difficulty-based curriculum
+  difficulty_curriculum:
+    enabled: false
+    difficulty_metric: "transcript_length"
+    start_percentile: 25
+    end_percentile: 100
+
+# Data augmentation during training
+training_augmentation:
+  # SpecAugment
+  spec_augment:
+    enabled: true
+    time_mask_param: 80
+    freq_mask_param: 27
+    num_time_masks: 2
+    num_freq_masks: 2
+    p: 0.5
+
+  # Speed perturbation
+  speed_perturbation:
+    enabled: true
+    speeds: [0.9, 1.0, 1.1]
+    p: 0.3
+
+  # Noise augmentation
+  noise_augmentation:
+    enabled: true
+    noise_factor: 0.005
+    p: 0.2
+
+# Validation strategy
+validation:
+  # Validation frequency
+  validation_frequency: "epoch" # epoch, steps
+  validation_steps: 1000
+
+  # Metrics computation
+  compute_metrics: true
+  prediction_loss_only: false
+
+  # Validation data sampling
+  max_eval_samples: null
+  eval_subset_ratio: 1.0
+
+# Learning rate finder
+lr_finder:
+  enabled: false
+  start_lr: 1e-7
+  end_lr: 1e-1
+  num_iter: 100
+
+# Hyperparameter optimization
+hyperparameter_optimization:
+  enabled: false
+  method: "optuna" # optuna, ray_tune, wandb_sweep
+
+  # Optuna settings
+  optuna:
+    n_trials: 50
+    timeout: 3600 # seconds
+    study_name: "twi_asr_optimization"
+
+    # Search space
+    search_space:
+      learning_rate:
+        type: "log_uniform"
+        low: 1e-6
+        high: 1e-3
+
+      batch_size:
+        type: "categorical"
+        choices: [8, 16, 32]
+
+      warmup_steps:
+        type: "int"
+        low: 100
+        high: 2000
+
+      weight_decay:
+        type: "log_uniform"
+        low: 1e-4
+        high: 1e-1
+
+# Model compilation (PyTorch 2.0+)
+model_compilation:
+  enabled: false
+  backend: "inductor" # inductor, aot_eager, cudagraphs
+  mode: "default" # default, reduce-overhead, max-autotune
+
+# Profiling and debugging
+profiling:
+  enabled: false
+  profile_memory: false
+  record_shapes: true
+  with_stack: false
+
+  # Memory profiling
+  memory_profiling:
+    enabled: false
+    record_memory_history: false
+
+# Experiment tracking
+experiment_tracking:
+  # Weights & Biases
+  wandb:
+    enabled: true
+    project: "twi-speech-recognition"
+    tags: ["wav2vec2", "twi", "asr"]
+    group: "baseline"
+    job_type: "train"
+
+    # Logging configuration
+    log_model: "end" # end, all, false
+    log_gradients: false
+    log_parameters: true
+    log_graph: false
+
+    # Watch model
+    watch_model: false
+    watch_log: "gradients"
+    watch_log_freq: 1000
+
+  # TensorBoard
+  tensorboard:
+    enabled: true
+    log_dir: "experiments/tensorboard"
+    flush_secs: 120
+
+  # MLflow
+  mlflow:
+    enabled: false
+    tracking_uri: null
+    experiment_name: "twi_asr"
+
+# Reproducibility
+reproducibility:
+  seed: 42
+  deterministic: false # May slow down training
+  benchmark: true # For consistent input sizes
+
+# Error handling and recovery
+error_handling:
+  # Automatic recovery
+  auto_recovery: true
+  checkpoint_recovery: true
+
+  # Error tolerance
+  ignore_data_errors: false
+  max_data_errors: 10
+
+  # NaN handling
+  detect_nan: true
+  skip_nan_batches: true
+
+# Performance monitoring
+performance_monitoring:
+  # System metrics
+  monitor_gpu_memory: true
+  monitor_cpu_usage: true
+  monitor_disk_io: false
+
+  # Training metrics
+  log_learning_rate: true
+  log_gradient_norm: true
+  log_parameter_norm: false
+
+  # Timing
+  log_step_time: true
+  log_epoch_time: true
+
+# Advanced training techniques
+advanced_techniques:
+  # Gradient accumulation with different batch sizes
+  variable_batch_size: false
+
+  # Stochastic weight averaging
+  swa:
+    enabled: false
+    swa_start: 0.8 # Start SWA at 80% of training
+    swa_lr: 1e-5
+
+  # Look-ahead optimizer
+  lookahead:
+    enabled: false
+    k: 5
+    alpha: 0.5
+
+# Resume training
+resume:
+  # Resume from checkpoint
+  resume_from_checkpoint: null
+  auto_find_batch_size: false
+
+  # Ignore mismatched sizes
+  ignore_mismatched_sizes: false
+
+# Export and deployment preparation
+export:
+  # Export best model
+  export_best_model: true
+  export_formats: ["pytorch", "onnx"]
+
+  # Model optimization for deployment
+  optimize_for_inference: true
+  quantization: "dynamic"

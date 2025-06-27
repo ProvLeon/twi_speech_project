@@ -1,0 +1,329 @@
+# Default Evaluation Configuration for Twi Speech Recognition
+# This configuration defines evaluation metrics, procedures, and settings
+
+evaluation:
+  # Enable/disable evaluation during training
+  enabled: true
+
+  # Evaluation frequency
+  eval_every_n_epochs: 1
+  eval_every_n_steps: null
+
+  # Evaluation datasets
+  datasets:
+    validation: true
+    test: true
+    custom: []
+
+  # Primary evaluation metrics
+  metrics:
+    # Word Error Rate (primary metric)
+    wer:
+      enabled: true
+      ignore_case: true
+      ignore_punctuation: true
+      char_level: false
+      normalize_text: true
+
+    # Character Error Rate
+    cer:
+      enabled: true
+      ignore_case: true
+      ignore_punctuation: false
+      normalize_text: true
+
+    # BLEU Score
+    bleu:
+      enabled: true
+      max_order: 4
+      smooth: true
+
+    # METEOR Score
+    meteor:
+      enabled: false # Disabled by default due to dependencies
+      alpha: 0.9
+      beta: 3.0
+      gamma: 0.5
+
+    # ROUGE Score
+    rouge:
+      enabled: false
+      rouge_types: ["rouge1", "rouge2", "rougeL"]
+
+    # Perplexity
+    perplexity:
+      enabled: true
+
+    # Confidence metrics
+    confidence:
+      enabled: true
+      compute_entropy: true
+      compute_variance: true
+
+# Twi-specific evaluation
+twi_evaluation:
+  # Dialect-specific evaluation
+  dialect_evaluation:
+    enabled: true
+    dialects: ["Asante", "Akuapem", "Fante"]
+    cross_dialect_analysis: true
+
+  # Tone accuracy evaluation
+  tone_evaluation:
+    enabled: false # Advanced feature
+    tone_markers:
+      [
+        "á",
+        "à",
+        "ā",
+        "é",
+        "è",
+        "ē",
+        "í",
+        "ì",
+        "ī",
+        "ó",
+        "ò",
+        "ō",
+        "ú",
+        "ù",
+        "ū",
+      ]
+
+  # Code-switching evaluation
+  code_switching:
+    enabled: true
+    languages: ["tw", "en"]
+    switching_points: ["word", "phrase"]
+
+  # Phoneme-level evaluation
+  phoneme_evaluation:
+    enabled: false # Advanced feature
+    phoneme_set: "twi_ipa"
+
+# Error analysis
+error_analysis:
+  # Confusion matrix
+  confusion_matrix:
+    enabled: true
+    char_level: false
+    word_level: true
+
+  # Error categorization
+  error_categorization:
+    enabled: true
+    categories:
+      - "substitution"
+      - "insertion"
+      - "deletion"
+      - "transposition"
+
+  # Most common errors
+  common_errors:
+    enabled: true
+    top_k: 50
+    save_to_file: true
+
+  # Length-based analysis
+  length_analysis:
+    enabled: true
+    buckets: [0, 5, 10, 20, 50, 100] # word counts
+
+  # Audio quality analysis
+  audio_quality_analysis:
+    enabled: true
+    snr_buckets: [0, 10, 20, 30, 40] # SNR in dB
+    duration_buckets: [0, 2, 5, 10, 20, 30] # seconds
+
+# Evaluation output
+output:
+  # Save detailed results
+  save_detailed_results: true
+  results_dir: "experiments/evaluation"
+
+  # Generate reports
+  generate_report: true
+  report_format: ["json", "csv", "html"]
+
+  # Include predictions
+  save_predictions: true
+  max_predictions: 1000
+
+  # Include attention weights
+  save_attention: false
+  attention_format: "numpy"
+
+# Visualization
+visualization:
+  # Plot metrics
+  plot_metrics: true
+  plot_format: ["png", "pdf"]
+
+  # Confusion matrix plots
+  plot_confusion_matrix: true
+  normalize_confusion: true
+
+  # Error distribution plots
+  plot_error_distribution: true
+
+  # Learning curves
+  plot_learning_curves: true
+
+# Real-time evaluation
+real_time:
+  # Live evaluation during training
+  enabled: false
+  update_frequency: 100 # steps
+
+  # Streaming evaluation
+  streaming: false
+  chunk_size: 1.0 # seconds
+
+  # Online metrics
+  online_metrics: ["wer", "latency"]
+
+# Benchmark evaluation
+benchmark:
+  # Standard benchmarks
+  common_voice: false
+  librispeech: false
+  custom_benchmarks: []
+
+  # Benchmark settings
+  benchmark_settings:
+    max_samples: 1000
+    random_seed: 42
+    stratify: true
+
+# Performance evaluation
+performance:
+  # Speed metrics
+  speed_metrics:
+    enabled: true
+    measure_inference_time: true
+    measure_preprocessing_time: true
+    measure_postprocessing_time: true
+
+  # Memory usage
+  memory_metrics:
+    enabled: true
+    measure_peak_memory: true
+    measure_average_memory: true
+
+  # Real-time factor
+  real_time_factor:
+    enabled: true
+    target_rtf: 0.1
+
+# Robustness evaluation
+robustness:
+  # Noise robustness
+  noise_robustness:
+    enabled: false
+    noise_types: ["gaussian", "babble", "music"]
+    snr_levels: [0, 5, 10, 15, 20]
+
+  # Speed robustness
+  speed_robustness:
+    enabled: false
+    speed_factors: [0.8, 0.9, 1.0, 1.1, 1.2]
+
+  # Volume robustness
+  volume_robustness:
+    enabled: false
+    volume_factors: [0.5, 0.7, 1.0, 1.3, 1.5]
+
+# Statistical analysis
+statistics:
+  # Significance testing
+  significance_testing:
+    enabled: false
+    test_type: "paired_t_test"
+    alpha: 0.05
+
+  # Confidence intervals
+  confidence_intervals:
+    enabled: true
+    confidence_level: 0.95
+    bootstrap_samples: 1000
+
+  # Effect size
+  effect_size:
+    enabled: false
+    measure: "cohen_d"
+
+# Advanced evaluation
+advanced:
+  # Adversarial examples
+  adversarial_evaluation:
+    enabled: false
+    attack_types: ["fgsm", "pgd"]
+    epsilon_values: [0.01, 0.05, 0.1]
+
+  # Uncertainty quantification
+  uncertainty_quantification:
+    enabled: false
+    method: "monte_carlo_dropout"
+    n_samples: 100
+
+  # Calibration
+  calibration:
+    enabled: false
+    calibration_method: "platt_scaling"
+    n_bins: 10
+
+# Integration with external tools
+external_tools:
+  # SCLITE integration
+  sclite:
+    enabled: false
+    path: null
+
+  # Kaldi integration
+  kaldi:
+    enabled: false
+    path: null
+
+  # Custom evaluation scripts
+  custom_scripts:
+    enabled: false
+    scripts: []
+
+# Logging and monitoring
+logging:
+  # Log evaluation progress
+  log_progress: true
+  log_frequency: 10 # samples
+
+  # Save evaluation logs
+  save_logs: true
+  log_file: "evaluation.log"
+
+  # Wandb logging
+  wandb_logging: true
+
+  # TensorBoard logging
+  tensorboard_logging: true
+
+# Quality control
+quality_control:
+  # Sanity checks
+  sanity_checks:
+    enabled: true
+    check_nan_metrics: true
+    check_inf_metrics: true
+    check_metric_ranges: true
+
+  # Validation thresholds
+  validation_thresholds:
+    min_wer: 0.0
+    max_wer: 1.0
+    min_bleu: 0.0
+    max_bleu: 1.0
+
+  # Early stopping on evaluation
+  early_stopping:
+    enabled: false
+    patience: 5
+    metric: "wer"
+    mode: "min"

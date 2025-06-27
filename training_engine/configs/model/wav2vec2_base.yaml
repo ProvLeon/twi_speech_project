@@ -1,0 +1,220 @@
+# Wav2Vec2 Base Model Configuration for Twi Speech Recognition
+# This configuration is optimized for low-resource language training
+
+model:
+  _target_: src.models.wav2vec2_model.Wav2Vec2ForTwiASR
+
+  # Base model selection
+  pretrained_model_name: "facebook/wav2vec2-base"
+  # Alternative options:
+  # - "facebook/wav2vec2-large-960h"
+  # - "facebook/wav2vec2-large-960h-lv60-self"
+  # - "microsoft/wav2vec2-base-960h"
+
+  # Model architecture
+  architecture:
+    hidden_size: 768
+    num_hidden_layers: 12
+    num_attention_heads: 12
+    intermediate_size: 3072
+    hidden_dropout: 0.1
+    attention_dropout: 0.1
+    feat_proj_dropout: 0.0
+    layerdrop: 0.1
+
+  # Twi-specific vocabulary
+  vocab:
+    vocab_size: 64 # Adjust based on Twi character set
+    pad_token: "[PAD]"
+    unk_token: "[UNK]"
+    bos_token: "[BOS]"
+    eos_token: "[EOS]"
+    blank_token: "[BLANK]"
+
+    # Twi-specific tokens
+    special_tokens:
+      - "ɔ" # Twi vowel
+      - "ɛ" # Twi vowel
+      - "ŋ" # Twi consonant
+      - "'" # Tone mark
+      - "̀" # Low tone
+      - "́" # High tone
+
+  # CTC (Connectionist Temporal Classification) settings
+  ctc:
+    loss_reduction: "mean"
+    blank_id: 0
+    zero_infinity: true
+
+  # Feature extraction
+  feature_extractor:
+    feature_size: 1
+    sampling_rate: 16000
+    padding_value: 0.0
+    do_normalize: true
+    return_attention_mask: true
+
+  # Convolutional layers
+  conv_layers:
+    - [512, 10, 5] # [out_channels, kernel_size, stride]
+    - [512, 3, 2]
+    - [512, 3, 2]
+    - [512, 3, 2]
+    - [512, 3, 2]
+    - [512, 2, 2]
+    - [512, 2, 2]
+
+  # Positional embeddings
+  positional_embedding:
+    num_positions: 512
+    padding_idx: 0
+
+  # Layer normalization
+  layer_norm:
+    eps: 1e-5
+    elementwise_affine: true
+
+# Fine-tuning strategy
+fine_tuning:
+  strategy: "full" # full, feature_extractor_frozen, partial
+
+  # Layers to freeze (if partial fine-tuning)
+  frozen_layers:
+    feature_extractor: false
+    encoder_layers: [0, 1, 2] # Freeze first 3 encoder layers
+
+  # Gradual unfreezing schedule
+  gradual_unfreezing:
+    enabled: false
+    unfreeze_schedule:
+      - epoch: 2
+        layers: ["encoder.layers.3", "encoder.layers.4"]
+      - epoch: 5
+        layers: ["encoder.layers.5", "encoder.layers.6"]
+      - epoch: 8
+        layers: ["feature_extractor"]
+
+# Training-specific model parameters
+training:
+  # Gradient settings
+  gradient_checkpointing: true
+  use_cache: false
+
+  # Attention settings
+  attention_mask: true
+  pad_to_multiple_of: 8
+
+  # Loss configuration
+  loss:
+    ctc_weight: 1.0
+    auxiliary_loss_weight: 0.1
+
+  # Regularization
+  dropout_rate: 0.1
+  weight_decay: 0.01
+
+  # Batch processing
+  max_length: 320000 # Maximum audio length in samples (20 seconds at 16kHz)
+  truncation: true
+  padding: "longest"
+
+# Model optimization
+optimization:
+  # Quantization for deployment
+  quantization:
+    enabled: false
+    method: "dynamic" # dynamic, static, qat
+
+  # Model compression
+  compression:
+    pruning:
+      enabled: false
+      sparsity: 0.1
+      structured: false
+
+    distillation:
+      enabled: false
+      teacher_model: "facebook/wav2vec2-large-960h"
+      temperature: 4.0
+      alpha: 0.7
+
+# Twi language adaptations
+twi_adaptations:
+  # Phoneme-aware training
+  phoneme_aware: true
+
+  # Tone-aware processing
+  tone_aware: true
+
+  # Dialect adaptation
+  dialect_adaptation:
+    enabled: true
+    use_dialect_embeddings: true
+    dialect_embedding_dim: 128
+
+  # Code-switching handling
+  code_switching:
+    enabled: true
+    languages: ["tw", "en"] # Twi and English
+
+# Data augmentation at model level
+model_augmentation:
+  # SpecAugment
+  spec_augment:
+    enabled: true
+    time_mask_param: 80
+    freq_mask_param: 27
+    num_time_masks: 2
+    num_freq_masks: 2
+
+  # Noise injection
+  noise_injection:
+    enabled: true
+    noise_factor: 0.005
+
+# Evaluation metrics
+evaluation:
+  metrics:
+    - "wer" # Word Error Rate
+    - "cer" # Character Error Rate
+    - "bleu" # BLEU score
+    - "perplexity"
+
+  # Language-specific evaluation
+  twi_specific_metrics:
+    tone_accuracy: true
+    dialect_confusion_matrix: true
+
+# Model checkpointing
+checkpointing:
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 5
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_wer"
+  greater_is_better: false
+
+# Memory optimization
+memory:
+  dataloader_pin_memory: true
+  dataloader_num_workers: 4
+  max_memory_mb: 8192
+  gradient_accumulation_steps: 4
+
+# Hardware-specific optimizations
+hardware_optimization:
+  # Mixed precision training
+  fp16: true
+  fp16_opt_level: "O1"
+  fp16_full_eval: false
+
+  # CUDA optimizations
+  cuda_optimizations:
+    use_cuda_amp: true
+    cudnn_benchmark: true
+    cudnn_deterministic: false
+
+  # Multi-GPU settings
+  multi_gpu:
+    strategy: "ddp" # ddp, deepspeed, fsdp
+    find_unused_parameters: false

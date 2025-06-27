@@ -1,0 +1,245 @@
+# Whisper Base Model Configuration for Twi Speech Recognition
+# Convenience configuration file for direct loading
+
+defaults:
+  - model: whisper_base
+  - data: twi_dataset
+  - training: default
+  - evaluation: default
+  - optimization: adam
+  - augmentation: basic
+  - _self_
+
+# Project Information
+project:
+  name: "twi_speech_recognition"
+  version: "1.0.0"
+  description: "Whisper Base Model Training for Twi ASR"
+  target_wer: 0.30
+
+# Experiment Configuration
+experiment:
+  name: "whisper_base_twi_asr"
+  tags: ["whisper", "twi", "base", "speech_recognition"]
+  notes: "Whisper base model training for Twi speech recognition with target WER < 30%"
+
+# Training specific overrides for Whisper base
+training:
+  num_epochs: 30
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 16
+  gradient_accumulation_steps: 4
+  learning_rate: 1e-5
+  warmup_steps: 500
+  weight_decay: 0.01
+
+  # Evaluation settings
+  evaluation_strategy: "steps"
+  eval_steps: 500
+  save_strategy: "steps"
+  save_steps: 1000
+  logging_steps: 100
+
+  # Whisper specific settings
+  freeze_encoder: false
+  freeze_decoder: false
+  language: "tw" # Twi language code
+  task: "transcribe"
+
+  # Optimization
+  max_grad_norm: 1.0
+  label_smoothing: 0.1
+
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 8
+    metric: "eval_wer"
+    threshold: 0.001
+    greater_is_better: false
+
+  # Model selection
+  metric_for_best_model: "eval_wer"
+  greater_is_better: false
+
+# Data configuration for Whisper
+data:
+  sample_rate: 16000
+  max_duration: 30.0
+  min_duration: 1.0
+  normalize_audio: true
+
+  # Whisper preprocessing
+  feature_extraction:
+    n_mels: 80
+    hop_length: 160
+    win_length: 400
+    n_fft: 400
+
+  # Data splits
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+
+  # Augmentation for Whisper
+  augmentation:
+    enabled: true
+    noise_prob: 0.2
+    speed_perturbation: true
+    volume_perturbation: false # Whisper is more sensitive to volume changes
+
+# Model specific configuration
+model:
+  _target_: src.models.whisper_model.WhisperForTwiASR
+  model_name: "openai/whisper-base"
+
+  # Architecture
+  vocab_size: null # Use default Whisper vocabulary
+  freeze_encoder: false
+  freeze_decoder: false
+  dialect_adaptation: true
+
+  # Whisper-specific settings
+  forced_decoder_ids: null
+  suppress_tokens: null
+  begin_suppress_tokens: [220, 50257]
+
+  # Generation parameters
+  max_length: 448
+  num_beams: 5
+  early_stopping: true
+  temperature: 0.6
+  repetition_penalty: 1.2
+
+# Logging and monitoring
+logging:
+  level: "INFO"
+  log_to_file: true
+  log_to_console: true
+
+  # Experiment tracking
+  wandb:
+    enabled: true
+    project: "twi-speech-recognition"
+    entity: null
+    tags: ["whisper", "base", "twi"]
+
+  tensorboard:
+    enabled: true
+    log_dir: "experiments/tensorboard"
+
+# Evaluation configuration
+evaluation:
+  metrics: ["wer", "cer", "bleu"]
+  compute_every_n_epochs: 3
+
+  # WER calculation
+  wer:
+    ignore_case: true
+    ignore_punctuation: true
+    char_level: false
+
+  # Twi-specific evaluation
+  dialect_evaluation: true
+  confusion_matrix: true
+
+  # Generation evaluation
+  generation:
+    max_length: 448
+    num_beams: 5
+    early_stopping: true
+
+# Checkpointing
+checkpointing:
+  save_every_n_epochs: 5
+  save_best_only: false
+  save_last: true
+  save_top_k: 3
+  monitor: "val_wer"
+  mode: "min"
+
+# Hardware and performance
+hardware:
+  device: "auto" # auto, cpu, cuda, mps
+  mixed_precision: true
+  compile_model: false
+
+  # DataLoader settings
+  num_workers: 2 # Lower for Whisper due to memory usage
+  pin_memory: true
+  persistent_workers: true
+
+# Debugging and development
+debug:
+  enabled: false
+  dev_mode: false
+  use_sample_data: false
+  sample_size: 100
+  limit_train_batches: 50
+  limit_val_batches: 25
+  fast_dev_run: false
+
+# Reproducibility
+seed:
+  random: 42
+  numpy: 42
+  torch: 42
+  transformers: 42
+deterministic: true
+
+# Data Sources Configuration
+data_sources:
+  mongodb:
+    uri: ${oc.env:MONGODB_URI,"mongodb://localhost:27017"}
+    database: ${oc.env:MONGO_DB_NAME,"twi_speech_data"}
+    collections:
+      recordings: "audio_recordings"
+      speakers: "speakers"
+
+  r2:
+    endpoint_url: ${oc.env:R2_ENDPOINT_URL,"https://dummy.r2.cloudflarestorage.com"}
+    access_key: ${oc.env:CLOUDFLARE_ACCESS_KEY_ID,"dummy_access_key"}
+    secret_key: ${oc.env:CLOUDFLARE_SECRET_ACCESS_KEY,"dummy_secret_key"}
+    bucket_name: ${oc.env:R2_BUCKET_NAME,"twi-speech-data"}
+
+# Whisper specific optimization
+optimization:
+  optimizer: "adamw"
+  learning_rate: 1e-5
+  weight_decay: 0.01
+  eps: 1e-8
+  betas: [0.9, 0.999]
+
+  # Learning rate scheduling
+  scheduler:
+    type: "cosine_with_restarts"
+    warmup_steps: 500
+    t_0: 1000
+    t_mult: 2
+    eta_min: 1e-7
+
+# Paths configuration
+paths:
+  # Data directories
+  data_dir: "data"
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  cache_dir: "data/cache"
+
+  # Model directories
+  model_dir: "models"
+  pretrained_dir: "models/pretrained"
+  checkpoint_dir: "experiments/checkpoints"
+
+  # Experiment directories
+  experiment_dir: "experiments/runs"
+  log_dir: "logs"
+  tensorboard_dir: "experiments/tensorboard"
+  wandb_dir: "experiments/wandb"
+
+  # Output directories
+  output_dir: "experiments/outputs"
+  evaluation_dir: "experiments/evaluation"
+
+  # Temporary directories
+  temp_dir: "temp"

@@ -1,0 +1,145 @@
+# Default configuration for Twi Speech Training Engine
+# This configuration allows running without external dependencies like MongoDB
+
+# Data split configuration
+data_split:
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+
+# MongoDB configuration (optional - will use dummy data if not available)
+mongodb:
+  uri: "" # Set MONGODB_URI environment variable or add your connection string here
+  database: "twi_speech_data"
+  collection: "audio_recordings"
+
+# R2 Storage configuration (optional)
+r2_storage:
+  bucket_name: "" # Set R2_BUCKET_NAME environment variable
+  access_key_id: "" # Set R2_ACCESS_KEY_ID environment variable
+  secret_access_key: "" # Set R2_SECRET_ACCESS_KEY environment variable
+  endpoint_url: "" # Set R2_ENDPOINT_URL environment variable
+
+# Audio configuration
+audio:
+  sample_rate: 16000
+  channels: 1
+  format: "wav"
+  bit_depth: 16
+  max_duration: 30
+  min_duration: 0.5
+  target_sample_rate: 16000
+  target_channels: 1
+
+# Text configuration
+text:
+  max_length: 500
+  min_length: 1
+  language: "tw"
+  normalize: true
+  lowercase: false
+
+# Cache configuration
+cache_dir: "data/cache"
+recordings_dir: "data/recordings"
+features_dir: "data/processed_superior"
+models_dir: "models/superior"
+analysis_dir: "analysis/superior"
+script_file: "script_actual.ts"
+
+# Model configuration
+model:
+  type: "wav2vec2"
+  pretrained_model: "facebook/wav2vec2-base"
+  hidden_size: 768
+  num_attention_heads: 12
+  num_hidden_layers: 12
+  intermediate_size: 3072
+  hidden_dropout_prob: 0.1
+  attention_dropout_prob: 0.1
+  final_dropout: 0.1
+  vocab_size: 100 # Will be determined from data
+  pad_token_id: 0
+  bos_token_id: 1
+  eos_token_id: 2
+
+# Training configuration
+training:
+  batch_size: 8
+  learning_rate: 1e-4
+  num_epochs: 10
+  warmup_steps: 500
+  gradient_accumulation_steps: 2
+  fp16: true
+  save_steps: 500
+  eval_steps: 500
+  logging_steps: 100
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "wer"
+  greater_is_better: false
+  output_dir: "outputs/models"
+  logging_dir: "outputs/logs"
+  dataloader_num_workers: 4
+  remove_unused_columns: true
+  label_names: ["labels"]
+
+# Legacy configuration support
+batch_size: 32
+learning_rate: 0.001
+num_epochs: 100
+num_workers: 4
+
+# Optimization configuration
+optimization:
+  optimizer: "adamw"
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1e-8
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  lr_scheduler_type: "linear"
+
+# Data augmentation configuration
+augmentation:
+  enable: true
+  noise_prob: 0.1
+  noise_min_level: 0.001
+  noise_max_level: 0.015
+  pitch_shift_prob: 0.1
+  pitch_shift_min: -2
+  pitch_shift_max: 2
+  time_stretch_prob: 0.1
+  time_stretch_min: 0.9
+  time_stretch_max: 1.1
+  volume_change_prob: 0.1
+  volume_min: 0.8
+  volume_max: 1.2
+
+# Evaluation configuration
+evaluation:
+  metrics: ["wer", "cer"]
+  beam_width: 10
+  lm_weight: 0.0
+  word_score: 0.0
+
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  use_wandb: false
+  wandb_project: "twi-speech"
+  wandb_entity: ""
+
+# Hardware configuration
+hardware:
+  device: "auto" # auto, cuda, cpu
+  mixed_precision: true
+  gradient_checkpointing: false
+
+# Development/Testing flags
+development:
+  use_dummy_data: false # Set to true to use dummy data for testing
+  dummy_samples: 100
+  fast_dev_run: false
+  profiler: null

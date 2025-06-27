@@ -1,0 +1,147 @@
+﻿Project Plan 
+(Reviewed)
+
+
+
+
+Project: Twi Speech-to-Text AI Model
+Version: 1.0
+
+
+
+Date: March 19th, 2025
+
+
+Prepared By: 
+Emmanuel Okantah Lomotey 
+(Full-Stack Developer, AI/ML Engineer, Project Manager)
+________________
+1. Project Overview
+Objective: Develop a production-ready Twi speech recognition system with ≤30% WER across major dialects
+In-Scope:
+* Speech data collection & validation (50+ hours)
+* Core CNN-GRU model development
+* Web API deployment
+Out-of-Scope:
+* Mobile offline functionality
+* Multi-dialect support (Akuapem/Fante)
+* Enterprise-grade SLA
+* Advanced language model integration
+Key Deliverables:
+1. Curated Twi speech dataset
+2. Trained CNN-GRU model (TensorFlow)
+3. Web API endpoint
+4. Simple Web Demo interface
+________________
+2. Project Team (3 Members)
+Role
+	Responsibilities
+	Skills
+	Time Commitment
+	1. Project Lead/ML Engineer
+	Architecture design, Model development, Deployment
+	Python, TensorFlow, Cloud ML
+	Part-time
+(30h/week)
+	2. Data Engineer
+	Speaker management, Basic QA, Audio cleaning and augmentation
+	Audio processing, SQL, Python
+	Part-time
+(20h/week)
+	3. Linguistic Validator
+	Transcription checks
+	Native Twi speaker
+	Part-time
+(10h/week)
+	________________
+3. Technology Stack
+Core Development:
+* Python 3.10, TensorFlow Lite
+* Librosa, Soundfile, Audiomentation
+* FastAPI, Render.com
+Data Management:
+* Google Drive (free tier)
+* Excel tracking
+Infrastructure:
+* Google Colab Pro
+* Render.com (Free Web Services)
+* Personal Android devices
+
+
+________________
+4. Detailed Timeline (4 Months)
+Phase 1: Data Collection & Prep (Months 1 – April)
+* W1-3 (01 - 14): Recruit 50 speakers via community networks 
+* W3-5 (15 - 20): Record 20hr raw audio from smartphones (24m/speaker)
+Phase 2: Model Development (Months 2-3 – May/June)
+* W6-9 (05 - 31): Custom CNN-Transformer(CNN-GRU) implementation
+* W10-13 (02 - 28): Training & optimization
+Phase 3: Deployment (Months 4 – July)
+* W14-18 (01 - 31): API development and deployment on Render
+
+
+________________
+5. Budget Breakdown (GHS)
+A. Personnel Costs
+* ML Engineer: 2,500/month × 4 = 10,000
+* Data Engineer: 1,000/month × 4 = 4,000
+* Linguistic Validator: 1,000/month × 2 = 2,000
+
+
+B. Data Collection
+* Recording equipment: Mobile Phone
+* Speaker incentives (50 × 50 GHS) = 2,500
+C. Infrastructure
+* Colab Pro: 2,500
+* Render hosting: Free tier + Occasional boosts = 700
+D. Contingency (7%) = 1,000
+Total Budget = 22,700 GHS
+________________
+6. Risk Management
+Risk
+	Probability
+	Impact
+	Mitigation Strategy
+	GRU Convergence Issues
+	High
+	Critical
+	Layer normalization & gradient clipping
+	Limited Training Data
+	High
+	Critical
+	SpecAugment time masking
+	Browser Compatibility
+	Medium
+	Medium
+	Progressive Web Approach
+	7. Performance Metrics
+Metric
+	Target
+	Measurement Tool
+	Word Error Rate
+	≤30%
+	jiwer library
+	Inference Speed
+	≤3s
+	Chrome DevTools
+	Model Size
+	<50MB
+	TensorFlow Lite
+	
+
+8. Stakeholder Management
+Potential Key Stakeholders:
+* Ghanaian Ministry of Education (Primary beneficiary)
+* Local Twi Language Board
+* Rural Community Representatives
+* International Businesses established in Ghana
+Communication Plan:
+* Bi-weekly sprint demos
+* Monthly steering committee updates
+9. Ethical Considerations
+1. All participants sign Twi/English consent forms
+2. All audio data publicly available under CC-BY-NC
+3. No commercial use without community approval.
+This plan is designed specifically based on:
+* ISO 21502:2020 (Project Management)
+* Ghana Data Protection Act, 2012 (Act 843)
