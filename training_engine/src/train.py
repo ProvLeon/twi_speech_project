@@ -13,6 +13,7 @@ from .data_loader import load_and_prepare_data
 from .model import ECommerceCommandModel
 
 from pydub import AudioSegment
+from tqdm import tqdm
 
 # --- Basic Configuration ---
 logging.basicConfig(
@@ -104,14 +105,14 @@ class AudioCommandDataset(Dataset):
 
 
 # --- Training and Evaluation Functions ---
-def train_one_epoch(model, data_loader, loss_fn, optimizer, device):
+def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, total_epochs):
     """Runs a single training epoch."""
     model.train()
     total_loss = 0
     correct_predictions = 0
     total_predictions = 0
 
-    for i, (inputs, labels) in enumerate(data_loader):
+    for i, (inputs, labels) in enumerate(tqdm(data_loader, desc=f"Epoch {epoch+1}/{EPOCHS} Training")):
         inputs, labels = inputs.to(device), labels.to(device)
 
         # Forward pass
@@ -134,7 +135,7 @@ def train_one_epoch(model, data_loader, loss_fn, optimizer, device):
     return avg_loss, accuracy
 
 
-def validate(model, data_loader, loss_fn, device):
+def validate(model, data_loader, loss_fn, device, epoch, total_epochs):
     """Evaluates the model on the validation set."""
     model.eval()
     total_loss = 0
@@ -142,7 +143,7 @@ def validate(model, data_loader, loss_fn, device):
     total_predictions = 0
 
     with torch.no_grad():
-        for inputs, labels in data_loader:
+        for inputs, labels in tqdm(data_loader, desc=f"Epoch {epoch+1}/{EPOCHS} Validation"):
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
             loss = loss_fn(outputs, labels)
@@ -234,8 +235,8 @@ def run_training(metadata_csv=None):
     # 6. Training Loop
     logging.info("--- Starting Training Loop ---")
     for epoch in range(start_epoch, EPOCHS):
-        train_loss, train_acc = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
-        val_loss, val_acc = validate(model, val_loader, loss_fn, device)
+        train_loss, train_acc = train_one_epoch(model, train_loader, loss_fn, optimizer, device, epoch, EPOCHS)
+        val_loss, val_acc = validate(model, val_loader, loss_fn, device, epoch, EPOCHS)
 
         logging.info(
             f"Epoch {epoch+1}/{EPOCHS} | "
