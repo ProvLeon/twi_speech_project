@@ -20,7 +20,7 @@ logging.basicConfig(
 
 # --- Training and Audio Hyperparameters ---
 # Paths
-MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'models', 'e_commerce_model')
+MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'e_commerce_model')
 os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
 MODEL_SAVE_PATH = os.path.join(MODEL_OUTPUT_DIR, 'best_model.pth')
 LABEL_MAP_PATH = os.path.join(MODEL_OUTPUT_DIR, 'label_map.json')

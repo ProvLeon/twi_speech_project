@@ -17,8 +17,8 @@ logging.basicConfig(
 
 # Define the expected path to the backend .env file relative to the 'training_engine' root
 # This allows the script to be run from the 'twi_speech/training_engine' directory
-BACKEND_ENV_PATH = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'backend', '.env')
-LOCAL_AUDIO_DIR = os.path.join(os.path.dirname(__file__),'..', 'data', 'e_commerce_audio')
+BACKEND_ENV_PATH = os.path.join(os.path.dirname(__file__), '.env')
+LOCAL_AUDIO_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'e_commerce_audio')
 
 # --- Database Connection ---
 

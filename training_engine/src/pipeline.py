@@ -5,7 +5,7 @@ import os
 from .data_loader import load_and_prepare_data
 from .train import run_training, run_testing
 
-AUDIO_DIR = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'e_commerce_audio')
+AUDIO_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'e_commerce_audio')
 METADATA_CSV = os.path.join(AUDIO_DIR, 'metadata.csv')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
