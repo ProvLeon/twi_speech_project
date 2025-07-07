@@ -2,6 +2,7 @@ aiohttp
 aiofiles
 audiomentations
 motor
+dotenv
 
 # Core ML Libraries
 torch>=1.12.0
@@ -42,11 +43,6 @@ boto3>=1.28.0       # For AWS S3 / Cloudflare R2
 pymongo[srv]>=4.3.0  # For MongoDB Atlas
 
 # Performance & Memory
-# Cloud & Database
-boto3>=1.28.0       # For AWS S3 / Cloudflare R2
-pymongo[srv]>=4.3.0  # For MongoDB Atlas
-
-# Performance & Memory
 psutil>=5.9.0
 memory-profiler>=0.60.0
 
@@ -56,7 +52,7 @@ datasets>=2.3.0      # For advanced dataset management
 wandb>=0.12.0         # For experiment tracking
 # optuna>=3.0.0         # For hyperparameter optimization
 # pytorch-lightning>=1.6.0  # For advanced training loops
-# accelerate>=0.12.0    # For distributed training
+accelerate>=0.12.0    # For distributed training
 
 # Development Tools (optional)
 # pytest>=7.1.0
