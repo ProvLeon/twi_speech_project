@@ -26,6 +26,7 @@ MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'e_co
 os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
 MODEL_SAVE_PATH = os.path.join(MODEL_OUTPUT_DIR, 'best_model.pth')
 LABEL_MAP_PATH = os.path.join(MODEL_OUTPUT_DIR, 'label_map.json')
+CHECKPOINT_PATH = os.path.join(MODEL_OUTPUT_DIR, 'checkpoint.pth')
 
 # Training settings
 LEARNING_RATE = 0.001
@@ -159,8 +160,7 @@ def validate(model, data_loader, loss_fn, device):
 # --- Main Orchestration ---
 def run_training(metadata_csv=None):
     """
-    Orchestrates the entire training pipeline.
-    If metadata_csv is provided, loads data from CSV instead of fetching from DB.
+    Orchestrates the entire training pipeline with checkpointing and resuming.
     """
     logging.info("--- Starting E-commerce Command Model Training ---")
 
@@ -179,11 +179,8 @@ def run_training(metadata_csv=None):
     # 2. Encode Labels
     unique_labels = df['prompt_text'].unique()
     label_to_int = {label: i for i, label in enumerate(unique_labels)}
-    int_to_label = {i: label for label, i in label_to_int.items()}
     num_classes = len(unique_labels)
     logging.info(f"Found {num_classes} unique command classes from 'prompt_text'.")
-
-    # Save the label map for later use during inference
     with open(LABEL_MAP_PATH, 'w') as f:
         json.dump(label_to_int, f, indent=4)
     logging.info(f"Label map saved to: {LABEL_MAP_PATH}")
@@ -194,30 +191,49 @@ def run_training(metadata_csv=None):
 
     # 4. Create Datasets and DataLoaders
     mel_spectrogram = torchaudio.transforms.MelSpectrogram(
-        sample_rate=TARGET_SAMPLE_RATE,
-        n_fft=N_FFT,
-        n_mels=N_MELS,
-        hop_length=HOP_LENGTH
+        sample_rate=TARGET_SAMPLE_RATE, n_fft=N_FFT, n_mels=N_MELS, hop_length=HOP_LENGTH
     )
-
     train_dataset = AudioCommandDataset(train_df, mel_spectrogram, label_to_int, TARGET_SAMPLE_RATE, MAX_AUDIO_SECONDS)
     val_dataset = AudioCommandDataset(val_df, mel_spectrogram, label_to_int, TARGET_SAMPLE_RATE, MAX_AUDIO_SECONDS)
-
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     # 5. Initialize Model, Loss, and Optimizer
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logging.info(f"Using device: {device}")
-
     model = ECommerceCommandModel(n_input_mels=N_MELS, n_output_classes=num_classes).to(device)
-    loss_fn = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    # --- Checkpoint Loading ---
+    start_epoch = 0
+    best_val_accuracy = 0.0
+    gdrive_checkpoint_path = '/content/drive/MyDrive/twi_speech_model_checkpoints/checkpoint.pth'
+
+    # If in Colab, try to copy checkpoint from Drive first
+    try:
+        import sys
+        if 'google.colab' in sys.modules and os.path.exists(gdrive_checkpoint_path):
+            import shutil
+            logging.info("Found checkpoint in Google Drive. Copying to local environment...")
+            shutil.copy(gdrive_checkpoint_path, CHECKPOINT_PATH)
+    except Exception as e:
+        logging.warning(f"Could not copy checkpoint from Google Drive: {e}")
+
+    if os.path.exists(CHECKPOINT_PATH):
+        logging.info(f"Loading checkpoint from {CHECKPOINT_PATH}")
+        checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        best_val_accuracy = checkpoint.get('best_val_accuracy', 0.0)
+        logging.info(f"Resuming training from epoch {start_epoch}")
+    else:
+        logging.info("No checkpoint found. Starting training from scratch.")
 
     # 6. Training Loop
-    best_val_accuracy = 0.0
     logging.info("--- Starting Training Loop ---")
-    for epoch in range(EPOCHS):
+    for epoch in range(start_epoch, EPOCHS):
         train_loss, train_acc = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
         val_loss, val_acc = validate(model, val_loader, loss_fn, device)
 
@@ -227,15 +243,66 @@ def run_training(metadata_csv=None):
             f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}"
         )
 
-        # Save the best model
+        # Save the best model separately
         if val_acc > best_val_accuracy:
             best_val_accuracy = val_acc
             torch.save(model.state_dict(), MODEL_SAVE_PATH)
             logging.info(f"New best model saved with validation accuracy: {best_val_accuracy:.4f}")
 
+        # Save a checkpoint at the end of every epoch
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'best_val_accuracy': best_val_accuracy,
+        }
+        torch.save(checkpoint, CHECKPOINT_PATH)
+        logging.info(f"Saved checkpoint for epoch {epoch}")
+
+        # If in Colab, copy checkpoint to Drive
+        try:
+            import sys
+            if 'google.colab' in sys.modules:
+                import shutil
+                gdrive_dest_dir = os.path.dirname(gdrive_checkpoint_path)
+                os.makedirs(gdrive_dest_dir, exist_ok=True)
+                shutil.copy(CHECKPOINT_PATH, gdrive_dest_dir)
+                logging.info(f"Copied checkpoint for epoch {epoch} to Google Drive.")
+        except Exception as e:
+            logging.warning(f"Could not copy checkpoint to Google Drive for epoch {epoch}: {e}")
+
     logging.info("--- Training Complete ---")
     logging.info(f"Best validation accuracy: {best_val_accuracy:.4f}")
     logging.info(f"Trained model and label map saved in: {MODEL_OUTPUT_DIR}")
+
+    # --- Final Step: Copy artifacts to Google Drive if in Colab ---
+    try:
+        import sys
+        import shutil
+        if 'google.colab' in sys.modules:
+            logging.info("Detected Google Colab environment. Copying model and label map to Google Drive...")
+
+            from google.colab import drive
+            drive.mount('/content/drive', force_remount=True)
+
+            gdrive_dest_dir = '/content/drive/MyDrive/twi_speech_model_checkpoints/'
+            os.makedirs(gdrive_dest_dir, exist_ok=True)
+
+            # Copy the best model
+            if os.path.exists(MODEL_SAVE_PATH):
+                shutil.copy(MODEL_SAVE_PATH, gdrive_dest_dir)
+                logging.info(f"Successfully copied model to {os.path.join(gdrive_dest_dir, 'best_model.pth')}")
+
+            # Copy the label map
+            if os.path.exists(LABEL_MAP_PATH):
+                shutil.copy(LABEL_MAP_PATH, gdrive_dest_dir)
+                logging.info(f"Successfully copied label map to {os.path.join(gdrive_dest_dir, 'label_map.json')}")
+
+    except ImportError:
+        # This will trigger if not in Colab, which is fine.
+        pass
+    except Exception as e:
+        logging.error(f"Failed to copy files to Google Drive: {e}")
 
 def run_testing(metadata_csv=None):
     """
