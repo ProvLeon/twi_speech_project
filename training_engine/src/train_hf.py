@@ -184,9 +184,11 @@ def run_hf_training(metadata_csv: str):
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
         gradient_accumulation_steps=2,
+        evaluation_strategy="epoch",
         num_train_epochs=10,
         fp16=True if torch.cuda.is_available() else False,
-        learning_rate=3e-5,
+        learning_rate=1e-4, #3e-5,
+        max_grad_norm=1.0,
         warmup_ratio=0.1,
         logging_steps=10,
     )
