@@ -151,16 +151,11 @@ def run_hf_training(metadata_csv: str):
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
         gradient_accumulation_steps=2,
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
         num_train_epochs=10,
         fp16=True if torch.cuda.is_available() else False,
         learning_rate=3e-5,
         warmup_ratio=0.1,
         logging_steps=10,
-        load_best_model_at_end=True,
-        metric_for_best_model="f1",
-        push_to_hub=False,
     )
     logging.info("Training arguments configured.")
 
@@ -180,8 +175,13 @@ def run_hf_training(metadata_csv: str):
     trainer.train()
     logging.info("--- Training Complete ---")
 
-    # 8. Save the final model and artifacts
-    trainer.save_model(MODEL_OUTPUT_DIR)
+    # 8. Manual Evaluation and Model Saving
+    logging.info("--- Starting Manual Evaluation ---")
+    eval_results = trainer.evaluate()
+    logging.info(f"Manual Evaluation Results: {eval_results}")
+
+    # Save the final model and artifacts
+    model.save_pretrained(MODEL_OUTPUT_DIR)
     logging.info(f"Fine-tuned model and artifacts saved to: {MODEL_OUTPUT_DIR}")
     logging.info("To use the model, load it from this directory using Wav2Vec2ForSequenceClassification.from_pretrained()")
 

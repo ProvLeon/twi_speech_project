@@ -4,3 +4,5 @@ __pycache__/
 data/*
 wandb
 data.zip
+models/e_commerce_model_hf/runs/*
+models/e_commerce_model/*
