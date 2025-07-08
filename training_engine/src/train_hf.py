@@ -9,15 +9,15 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score
 from transformers import (
     AutoConfig,
-    Wav2Vec2Processor,
+    Wav2Vec2FeatureExtractor,
     Wav2Vec2ForSequenceClassification,
     Trainer,
     TrainingArguments,
     DataCollatorWithPadding,
 )
 import wandb
-os.environ["WANDB_API_KEY"] = "7037e1e9536dba5af8324bc01133b75b17c9193f"
 if not wandb.api.api_key:
+    os.environ["WANDB_API_KEY"] = "7037e1e9536dba5af8324bc01133b75b17c9193f"
     wandb.login(key="7037e1e9536dba5af8324bc01133b75b17c9193f")
 
 
@@ -132,15 +132,15 @@ def run_hf_training(metadata_csv: str):
     dataset, label2id, id2label = load_and_prepare_dataset(metadata_csv)
     logging.info(f"Training set size: {len(dataset['train'])}, Validation set size: {len(dataset['eval'])}")
 
-    # 2. Load Processor (not just Feature Extractor)
-    processor = Wav2Vec2Processor.from_pretrained(MODEL_CHECKPOINT)
-    logging.info("Loaded Wav2Vec2Processor.")
+    # 2. Load Feature Extractor
+    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_CHECKPOINT)
+    logging.info("Loaded Wav2Vec2FeatureExtractor.")
 
     # 3. Preprocess the dataset
     # Remove all non-numeric fields after preprocessing
     keep_cols = ("input_values", "attention_mask", "labels")
     encoded_dataset = dataset.map(
-        lambda x: preprocess_function(x, processor.feature_extractor),
+        lambda x: preprocess_function(x, feature_extractor),
         remove_columns=[col for col in dataset["train"].column_names if col not in keep_cols],
         batched=True,
         batch_size=8
@@ -165,7 +165,7 @@ def run_hf_training(metadata_csv: str):
         print(np.array(encoded_dataset["train"][i]["input_values"]).shape)
 
     # --- Setup Data Collator for Audio ---
-    data_collator = DataCollatorWithPadding(tokenizer=processor, padding=True)
+    data_collator = DataCollatorWithPadding(tokenizer=feature_extractor, padding=True)
 
     # --- Debug: Print batch shape before training ---
     from torch.utils.data import DataLoader
@@ -190,7 +190,7 @@ def run_hf_training(metadata_csv: str):
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
         gradient_accumulation_steps=2,
-        # eval_strategy="epoch",
+        eval_strategy="epoch",
         num_train_epochs=10,
         fp16=True if torch.cuda.is_available() else False,
         learning_rate=1e-4, #3e-5,
@@ -200,6 +200,7 @@ def run_hf_training(metadata_csv: str):
     )
     logging.info("Training arguments configured.")
 
+    data_collator = DataCollatorWithPadding(tokenizer=feature_extractor, padding=True)
     # 6. Initialize the Trainer
     trainer = Trainer(
         model=model,
@@ -208,7 +209,6 @@ def run_hf_training(metadata_csv: str):
         eval_dataset=encoded_dataset["eval"],
         data_collator=data_collator,
         compute_metrics=compute_metrics,
-        tokenizer=processor,  # Use tokenizer=processor for compatibility
     )
     logging.info("Trainer initialized.")
 
