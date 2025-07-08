@@ -38,7 +38,8 @@ os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache"
 
 def load_and_prepare_dataset(metadata_csv_path: str):
     """
-    Loads the dataset from a CSV file, splits it, and prepares it for Hugging Face.
+    Loads the dataset from a CSV file using pandas, splits it, and prepares it for Hugging Face.
+    This avoids local caching issues in Colab and similar environments.
     """
     logging.info(f"Loading metadata from {metadata_csv_path}")
     df = pd.read_csv(metadata_csv_path)
@@ -58,41 +59,23 @@ def load_and_prepare_dataset(metadata_csv_path: str):
         json.dump({"label2id": label2id, "id2label": id2label}, f, indent=4)
     logging.info(f"Label map saved to {label_map_path}")
 
-    # Split the data
-    train_df, val_df = train_test_split(
-        df,
-        test_size=0.2,
-        random_state=42,
-        stratify=df['prompt_text']
-    )
+    # Map string labels to integer IDs in the DataFrame
+    df["label"] = df["prompt_text"].map(label2id)
 
-    # Save train and val splits BEFORE loading them
-    train_csv_path = os.path.join(os.path.dirname(metadata_csv_path), 'train.csv')
-    val_csv_path = os.path.join(os.path.dirname(metadata_csv_path), 'val.csv')
-    train_df.to_csv(train_csv_path, index=False)
-    val_df.to_csv(val_csv_path, index=False)
-
-    # Now load them
-    dataset = load_dataset(
-        'csv',
-        data_files={'train':  train_csv_path, 'eval': val_csv_path},
-                           # data_dir=os.path.dirname(metadata_csv_path),
-                           cache_dir="/tmp/hf_cache"
-    )
-
+    # Split the data using Hugging Face Dataset's train_test_split for consistency
+    from datasets import Dataset, DatasetDict
+    dataset = Dataset.from_pandas(df)
+    train_test_split = dataset.train_test_split(test_size=0.2, stratify_by_column="label")
+    dataset_dict = DatasetDict({
+        'train': train_test_split['train'],
+        'eval': train_test_split['test']
+    })
 
     # Cast the 'local_path' column to Audio, which automatically loads and resamples
-    dataset = dataset.cast_column("local_path", Audio(sampling_rate=16000))
-    dataset = dataset.rename_column("prompt_text", "label_str")
+    dataset_dict = dataset_dict.cast_column("local_path", Audio(sampling_rate=16000))
+    dataset_dict = dataset_dict.rename_column("prompt_text", "label_str")
 
-    # Map string labels to integer IDs
-    def map_label_to_id(example):
-        example["label"] = label2id[example["label_str"]]
-        return example
-
-    dataset = dataset.map(map_label_to_id)
-
-    return dataset, label2id, id2label
+    return dataset_dict, label2id, id2label
 
 def preprocess_function(examples, feature_extractor, max_duration_s=5):
     """
