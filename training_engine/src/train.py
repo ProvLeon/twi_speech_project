@@ -7,6 +7,9 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+from audiomentations import Compose, AddGaussianNoise, TimeStretch, PitchShift
+
 from .data_loader import load_and_prepare_data
 
 
@@ -34,6 +37,7 @@ LEARNING_RATE = 0.001
 BATCH_SIZE = 16
 EPOCHS = 30
 TEST_SPLIT_SIZE = 0.2
+EARLY_STOPPING_PATIENCE = 5  # Number of epochs to wait for improvement before stopping
 
 # Audio processing settings
 TARGET_SAMPLE_RATE = 16000
@@ -48,12 +52,13 @@ class AudioCommandDataset(Dataset):
     A custom PyTorch Dataset to load, preprocess, and serve audio data for training/testing.
     Robust to missing/corrupt files and always returns mono waveform.
     """
-    def __init__(self, df: pd.DataFrame, transform, label_map: dict, sample_rate: int, max_seconds: int):
+    def __init__(self, df: pd.DataFrame, transform, label_map: dict, sample_rate: int, max_seconds: int, augmentations=None):
         self.df = df
         self.transform = transform
         self.label_map = label_map
         self.sample_rate = sample_rate
         self.max_samples = max_seconds * sample_rate
+        self.augmentations = augmentations
 
     def __len__(self):
         return len(self.df)
@@ -87,6 +92,12 @@ class AudioCommandDataset(Dataset):
             logging.error(f"Error loading audio file {audio_path}: {e}")
             return torch.zeros(1, N_MELS, self.max_samples // HOP_LENGTH + 1), 0
 
+        # Apply augmentations before resampling and padding
+        if self.augmentations:
+            waveform_np = waveform.numpy()
+            augmented_samples = self.augmentations(samples=waveform_np, sample_rate=self.sample_rate)
+            waveform = torch.from_numpy(augmented_samples)
+
         if sr != self.sample_rate:
             resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sample_rate)
             waveform = resampler(waveform)
@@ -105,14 +116,14 @@ class AudioCommandDataset(Dataset):
 
 
 # --- Training and Evaluation Functions ---
-def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, total_epochs):
+def train_one_epoch(model, data_loader, loss_fn, optimizer, device):
     """Runs a single training epoch."""
     model.train()
     total_loss = 0
     correct_predictions = 0
     total_predictions = 0
 
-    for i, (inputs, labels) in enumerate(tqdm(data_loader, desc=f"Epoch {epoch+1}/{EPOCHS} Training")):
+    for i, (inputs, labels) in enumerate(tqdm(data_loader, desc="Training")):
         inputs, labels = inputs.to(device), labels.to(device)
 
         # Forward pass
@@ -135,7 +146,23 @@ def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, total
     return avg_loss, accuracy
 
 
-def validate(model, data_loader, loss_fn, device, epoch, total_epochs):
+def save_training_plots(train_history, val_history, metric, output_dir):
+    """Saves plots of training and validation metrics."""
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_history, label=f'Training {metric}')
+    plt.plot(val_history, label=f'Validation {metric}')
+    plt.title(f'Training and Validation {metric}')
+    plt.xlabel('Epochs')
+    plt.ylabel(metric)
+    plt.legend()
+    plt.grid(True)
+    save_path = os.path.join(output_dir, f'{metric.lower()}_plot.png')
+    plt.savefig(save_path)
+    plt.close()
+    logging.info(f"Saved {metric} plot to {save_path}")
+
+
+def validate(model, data_loader, loss_fn, device):
     """Evaluates the model on the validation set."""
     model.eval()
     total_loss = 0
@@ -143,7 +170,7 @@ def validate(model, data_loader, loss_fn, device, epoch, total_epochs):
     total_predictions = 0
 
     with torch.no_grad():
-        for inputs, labels in tqdm(data_loader, desc=f"Epoch {epoch+1}/{EPOCHS} Validation"):
+        for inputs, labels in tqdm(data_loader, desc="Validation"):
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
             loss = loss_fn(outputs, labels)
@@ -191,10 +218,18 @@ def run_training(metadata_csv=None):
     logging.info(f"Training set size: {len(train_df)}, Validation set size: {len(val_df)}")
 
     # 4. Create Datasets and DataLoaders
+    # Define augmentations
+    augmentations = Compose([
+        AddGaussianNoise(min_amplitude=0.001, max_amplitude=0.015, p=0.5),
+        TimeStretch(min_rate=0.8, max_rate=1.25, p=0.5),
+        PitchShift(min_semitones=-4, max_semitones=4, p=0.5)
+    ])
+
     mel_spectrogram = torchaudio.transforms.MelSpectrogram(
         sample_rate=TARGET_SAMPLE_RATE, n_fft=N_FFT, n_mels=N_MELS, hop_length=HOP_LENGTH
     )
-    train_dataset = AudioCommandDataset(train_df, mel_spectrogram, label_to_int, TARGET_SAMPLE_RATE, MAX_AUDIO_SECONDS)
+    # Apply augmentations only to the training set
+    train_dataset = AudioCommandDataset(train_df, mel_spectrogram, label_to_int, TARGET_SAMPLE_RATE, MAX_AUDIO_SECONDS, augmentations=augmentations)
     val_dataset = AudioCommandDataset(val_df, mel_spectrogram, label_to_int, TARGET_SAMPLE_RATE, MAX_AUDIO_SECONDS)
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
@@ -205,10 +240,16 @@ def run_training(metadata_csv=None):
     model = ECommerceCommandModel(n_input_mels=N_MELS, n_output_classes=num_classes).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     loss_fn = torch.nn.CrossEntropyLoss()
+    # Add a learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
 
     # --- Checkpoint Loading ---
     start_epoch = 0
     best_val_accuracy = 0.0
+    best_val_loss = float('inf')
+    patience_counter = 0
+    train_loss_history, val_loss_history = [], []
+    train_acc_history, val_acc_history = [], []
     gdrive_checkpoint_path = '/content/drive/MyDrive/twi_speech_model_checkpoints/checkpoint.pth'
 
     # If in Colab, try to copy checkpoint from Drive first
@@ -228,6 +269,7 @@ def run_training(metadata_csv=None):
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
         best_val_accuracy = checkpoint.get('best_val_accuracy', 0.0)
+        best_val_loss = checkpoint.get('best_val_loss', float('inf'))
         logging.info(f"Resuming training from epoch {start_epoch}")
     else:
         logging.info("No checkpoint found. Starting training from scratch.")
@@ -235,20 +277,35 @@ def run_training(metadata_csv=None):
     # 6. Training Loop
     logging.info("--- Starting Training Loop ---")
     for epoch in range(start_epoch, EPOCHS):
-        train_loss, train_acc = train_one_epoch(model, train_loader, loss_fn, optimizer, device, epoch, EPOCHS)
-        val_loss, val_acc = validate(model, val_loader, loss_fn, device, epoch, EPOCHS)
+        logging.info(f"--- Epoch {epoch+1}/{EPOCHS} ---")
+        train_loss, train_acc = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
+        val_loss, val_acc = validate(model, val_loader, loss_fn, device)
 
+        # Log metrics
         logging.info(
             f"Epoch {epoch+1}/{EPOCHS} | "
             f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | "
             f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}"
         )
 
-        # Save the best model separately
-        if val_acc > best_val_accuracy:
+        # Store history for plotting
+        train_loss_history.append(train_loss)
+        val_loss_history.append(val_loss)
+        train_acc_history.append(train_acc)
+        val_acc_history.append(val_acc)
+
+        # Step the scheduler
+        scheduler.step(val_loss)
+
+        # Save the best model based on validation loss
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             best_val_accuracy = val_acc
             torch.save(model.state_dict(), MODEL_SAVE_PATH)
-            logging.info(f"New best model saved with validation accuracy: {best_val_accuracy:.4f}")
+            logging.info(f"New best model saved with validation loss: {best_val_loss:.4f} and accuracy: {best_val_accuracy:.4f}")
+            patience_counter = 0  # Reset patience
+        else:
+            patience_counter += 1
 
         # Save a checkpoint at the end of every epoch
         checkpoint = {
@@ -256,6 +313,7 @@ def run_training(metadata_csv=None):
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'best_val_accuracy': best_val_accuracy,
+            'best_val_loss': best_val_loss,
         }
         torch.save(checkpoint, CHECKPOINT_PATH)
         logging.info(f"Saved checkpoint for epoch {epoch}")
@@ -272,7 +330,15 @@ def run_training(metadata_csv=None):
         except Exception as e:
             logging.warning(f"Could not copy checkpoint to Google Drive for epoch {epoch}: {e}")
 
+        # Early stopping
+        if patience_counter >= EARLY_STOPPING_PATIENCE:
+            logging.info(f"Validation loss has not improved for {EARLY_STOPPING_PATIENCE} epochs. Stopping early.")
+            break
+
     logging.info("--- Training Complete ---")
+    # Save the training plots
+    save_training_plots(train_loss_history, val_loss_history, "Loss", MODEL_OUTPUT_DIR)
+    save_training_plots(train_acc_history, val_acc_history, "Accuracy", MODEL_OUTPUT_DIR)
     logging.info(f"Best validation accuracy: {best_val_accuracy:.4f}")
     logging.info(f"Trained model and label map saved in: {MODEL_OUTPUT_DIR}")
 
