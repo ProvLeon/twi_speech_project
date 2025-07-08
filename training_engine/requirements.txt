@@ -49,10 +49,10 @@ memory-profiler>=0.60.0
 # Optional Advanced Features (uncomment if needed)
 transformers>=4.20.0  # For transformer-based models
 datasets>=2.3.0      # For advanced dataset management
+accelerate>=0.12.0    # For distributed training
 wandb>=0.12.0         # For experiment tracking
 # optuna>=3.0.0         # For hyperparameter optimization
 # pytorch-lightning>=1.6.0  # For advanced training loops
-accelerate>=0.12.0    # For distributed training
 
 # Development Tools (optional)
 # pytest>=7.1.0
