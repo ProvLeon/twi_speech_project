@@ -15,6 +15,11 @@ from transformers import (
     TrainingArguments,
     DataCollatorWithPadding,
 )
+import wandb
+os.environ["WANDB_API_KEY"] = "7037e1e9536dba5af8324bc01133b75b17c9193f"
+
+wandb.login(key="7037e1e9536dba5af8324bc01133b75b17c9193f")
+
 
 # --- Basic Configuration ---
 logging.basicConfig(
