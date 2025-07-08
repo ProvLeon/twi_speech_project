@@ -31,6 +31,8 @@ MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'e_co
 
 os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
 os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache"
+train_csv_path = os.path.abspath(os.path.join(os.path.dirname(metadata_csv_path), 'train.csv'))
+val_csv_path = os.path.abspath(os.path.join(os.path.dirname(metadata_csv_path), 'val.csv'))
 
 # --- Helper Functions ---
 
@@ -73,8 +75,8 @@ def load_and_prepare_dataset(metadata_csv_path: str):
     # Now load them
     dataset = load_dataset(
         'csv',
-        data_files={'train': 'train.csv', 'eval': 'val.csv'},
-                           data_dir=os.path.dirname(metadata_csv_path),
+        data_files={'train':  train_csv_path, 'eval': val_csv_path},
+                           # data_dir=os.path.dirname(metadata_csv_path),
                            cache_dir="/tmp/hf_cache"
     )
 
