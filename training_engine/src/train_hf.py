@@ -13,6 +13,7 @@ from transformers import (
     Wav2Vec2ForSequenceClassification,
     Trainer,
     TrainingArguments,
+    DataCollatorWithPadding,
 )
 
 # --- Basic Configuration ---
@@ -88,6 +89,7 @@ def load_and_prepare_dataset(metadata_csv_path: str):
 def preprocess_function(examples, feature_extractor, max_duration_s=5):
     """
     Preprocesses audio data for the Wav2Vec2 model.
+    Ensures input_values are 1D arrays and lets the data collator handle padding.
     """
     audio_arrays = [x["array"] for x in examples["local_path"]]
     inputs = feature_extractor(
@@ -95,8 +97,11 @@ def preprocess_function(examples, feature_extractor, max_duration_s=5):
         sampling_rate=feature_extractor.sampling_rate,
         max_length=int(feature_extractor.sampling_rate * max_duration_s),
         truncation=True,
-        padding=True
+        padding=False,  # Let the data collator handle padding!
+        # return_attention_mask=True
     )
+    # Add labels
+    inputs["label"] = examples["label"]
     return inputs
 
 def compute_metrics(eval_pred):
@@ -126,13 +131,41 @@ def run_hf_training(metadata_csv: str):
     logging.info("Loaded Wav2Vec2FeatureExtractor.")
 
     # 3. Preprocess the dataset
+    # Remove all non-numeric fields after preprocessing
+    keep_cols = ("input_values", "attention_mask", "label")
     encoded_dataset = dataset.map(
         lambda x: preprocess_function(x, feature_extractor),
-        remove_columns=["local_path", "label_str"],
+        remove_columns=[col for col in dataset["train"].column_names if col not in keep_cols],
         batched=True,
         batch_size=8
     )
     logging.info("Dataset preprocessed for the model.")
+
+    # --- Debugging: Check processed data for learning issues ---
+    print("Sample processed training example:", encoded_dataset["train"][0])
+    print("Sample processed label:", encoded_dataset["train"][0].get("label"))
+    unique_labels = set([ex["label"] for ex in encoded_dataset["train"]])
+    print("Unique labels in training set:", unique_labels)
+    import numpy as np
+    input_vals = encoded_dataset["train"][0]["input_values"]
+    print("Any NaNs in input_values?", np.isnan(input_vals).any())
+    print("All zeros in input_values?", np.all(np.array(input_vals) == 0))
+    # Check label distribution
+    from collections import Counter
+    print("Label distribution in training set:", Counter([ex["label"] for ex in encoded_dataset["train"]]))
+    # Check input shapes for first batch
+    print("Shape of input_values for first 8 examples:")
+    for i in range(8):
+        print(np.array(encoded_dataset["train"][i]["input_values"]).shape)
+
+    # --- Setup Data Collator for Audio ---
+    data_collator = DataCollatorWithPadding(tokenizer=feature_extractor, padding=True)
+
+    # --- Debug: Print batch shape before training ---
+    from torch.utils.data import DataLoader
+    dl = DataLoader(encoded_dataset["train"], batch_size=8, collate_fn=data_collator)
+    batch = next(iter(dl))
+    print("Batch input_values shape:", batch["input_values"].shape)
 
     # 4. Load the Model
     config = AutoConfig.from_pretrained(
@@ -159,6 +192,7 @@ def run_hf_training(metadata_csv: str):
     )
     logging.info("Training arguments configured.")
 
+    data_collator = DataCollatorWithPadding(tokenizer=feature_extractor, padding=True)
     # 6. Initialize the Trainer
     trainer = Trainer(
         model=model,
@@ -166,6 +200,7 @@ def run_hf_training(metadata_csv: str):
         train_dataset=encoded_dataset["train"],
         eval_dataset=encoded_dataset["eval"],
         tokenizer=feature_extractor, # The feature extractor is passed as the tokenizer
+        data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
     logging.info("Trainer initialized.")
