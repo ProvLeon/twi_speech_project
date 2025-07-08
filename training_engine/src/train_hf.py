@@ -107,7 +107,7 @@ def preprocess_function(examples, feature_extractor, max_duration_s=5):
         # return_attention_mask=True
     )
     # Add labels
-    inputs["label"] = examples["label"]
+    inputs["labels"] = examples["labels"]
     return inputs
 
 def compute_metrics(eval_pred):
@@ -138,7 +138,7 @@ def run_hf_training(metadata_csv: str):
 
     # 3. Preprocess the dataset
     # Remove all non-numeric fields after preprocessing
-    keep_cols = ("input_values", "attention_mask", "label")
+    keep_cols = ("input_values", "attention_mask", "labels")
     encoded_dataset = dataset.map(
         lambda x: preprocess_function(x, feature_extractor),
         remove_columns=[col for col in dataset["train"].column_names if col not in keep_cols],
