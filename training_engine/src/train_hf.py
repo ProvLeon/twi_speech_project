@@ -63,8 +63,11 @@ def load_and_prepare_dataset(metadata_csv_path: str):
     df["label"] = df["prompt_text"].map(label2id)
 
     # Split the data using Hugging Face Dataset's train_test_split for consistency
-    from datasets import Dataset, DatasetDict
+    from datasets import Dataset, DatasetDict, ClassLabel
     dataset = Dataset.from_pandas(df)
+    num_classes = len(label2id)
+    class_label_feature = ClassLabel(num_classes=num_classes, names=[str(i) for i in range(num_classes)])
+    dataset = dataset.cast_column("label", class_label_feature)
     train_test_split = dataset.train_test_split(test_size=0.2, stratify_by_column="label")
     dataset_dict = DatasetDict({
         'train': train_test_split['train'],
