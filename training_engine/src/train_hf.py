@@ -31,8 +31,8 @@ MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'e_co
 
 os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
 os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache"
-train_csv_path = os.path.abspath(os.path.join(os.path.dirname(metadata_csv_path), 'train.csv'))
-val_csv_path = os.path.abspath(os.path.join(os.path.dirname(metadata_csv_path), 'val.csv'))
+# train_csv_path = os.path.abspath(os.path.join(os.path.dirname(metadata_csv_path), 'train.csv'))
+# val_csv_path = os.path.abspath(os.path.join(os.path.dirname(metadata_csv_path), 'val.csv'))
 
 # --- Helper Functions ---
 
