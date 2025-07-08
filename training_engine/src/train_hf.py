@@ -165,7 +165,7 @@ def run_hf_training(metadata_csv: str):
         print(np.array(encoded_dataset["train"][i]["input_values"]).shape)
 
     # --- Setup Data Collator for Audio ---
-    data_collator = DataCollatorWithPadding(processor=processor, padding=True)
+    data_collator = DataCollatorWithPadding(tokenizer=processor, padding=True)
 
     # --- Debug: Print batch shape before training ---
     from torch.utils.data import DataLoader
@@ -208,7 +208,7 @@ def run_hf_training(metadata_csv: str):
         eval_dataset=encoded_dataset["eval"],
         data_collator=data_collator,
         compute_metrics=compute_metrics,
-        # processor=processor,  # Uncomment if using HF >= 4.36
+        tokenizer=processor,  # Use tokenizer=processor for compatibility
     )
     logging.info("Trainer initialized.")
 
