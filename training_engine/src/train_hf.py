@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score
 from transformers import (
     AutoConfig,
-    Wav2Vec2FeatureExtractor,
+    Wav2Vec2Processor,
     Wav2Vec2ForSequenceClassification,
     Trainer,
     TrainingArguments,
@@ -132,15 +132,15 @@ def run_hf_training(metadata_csv: str):
     dataset, label2id, id2label = load_and_prepare_dataset(metadata_csv)
     logging.info(f"Training set size: {len(dataset['train'])}, Validation set size: {len(dataset['eval'])}")
 
-    # 2. Load Feature Extractor
-    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_CHECKPOINT)
-    logging.info("Loaded Wav2Vec2FeatureExtractor.")
+    # 2. Load Processor (not just Feature Extractor)
+    processor = Wav2Vec2Processor.from_pretrained(MODEL_CHECKPOINT)
+    logging.info("Loaded Wav2Vec2Processor.")
 
     # 3. Preprocess the dataset
     # Remove all non-numeric fields after preprocessing
     keep_cols = ("input_values", "attention_mask", "labels")
     encoded_dataset = dataset.map(
-        lambda x: preprocess_function(x, feature_extractor),
+        lambda x: preprocess_function(x, processor.feature_extractor),
         remove_columns=[col for col in dataset["train"].column_names if col not in keep_cols],
         batched=True,
         batch_size=8
@@ -165,7 +165,7 @@ def run_hf_training(metadata_csv: str):
         print(np.array(encoded_dataset["train"][i]["input_values"]).shape)
 
     # --- Setup Data Collator for Audio ---
-    data_collator = DataCollatorWithPadding(tokenizer=feature_extractor, padding=True)
+    data_collator = DataCollatorWithPadding(processor=processor, padding=True)
 
     # --- Debug: Print batch shape before training ---
     from torch.utils.data import DataLoader
@@ -200,16 +200,15 @@ def run_hf_training(metadata_csv: str):
     )
     logging.info("Training arguments configured.")
 
-    data_collator = DataCollatorWithPadding(tokenizer=feature_extractor, padding=True)
     # 6. Initialize the Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=encoded_dataset["train"],
         eval_dataset=encoded_dataset["eval"],
-        tokenizer=feature_extractor, # The feature extractor is passed as the tokenizer
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        # processor=processor,  # Uncomment if using HF >= 4.36
     )
     logging.info("Trainer initialized.")
 
