@@ -17,8 +17,8 @@ from transformers import (
 )
 import wandb
 os.environ["WANDB_API_KEY"] = "7037e1e9536dba5af8324bc01133b75b17c9193f"
-
-wandb.login(key="7037e1e9536dba5af8324bc01133b75b17c9193f")
+if not wandb.api.api_key:
+    wandb.login(key="7037e1e9536dba5af8324bc01133b75b17c9193f")
 
 
 # --- Basic Configuration ---
@@ -78,6 +78,13 @@ def load_and_prepare_dataset(metadata_csv_path: str):
         'train': train_test_split['train'],
         'eval': train_test_split['test']
     })
+    # --- FIX: Cast label column back to int for Trainer compatibility ---
+    from datasets import Value
+
+    for split in dataset_dict:
+        dataset_dict[split] = dataset_dict[split].cast_column("label", Value("int64"))
+        dataset_dict[split] = dataset_dict[split].rename_column("label", "labels")
+
 
     # Cast the 'local_path' column to Audio, which automatically loads and resamples
     dataset_dict = dataset_dict.cast_column("local_path", Audio(sampling_rate=16000))
