@@ -149,8 +149,8 @@ def run_hf_training(metadata_csv: str):
 
     # --- Debugging: Check processed data for learning issues ---
     print("Sample processed training example:", encoded_dataset["train"][0])
-    print("Sample processed label:", encoded_dataset["train"][0].get("label"))
-    unique_labels = set([ex["label"] for ex in encoded_dataset["train"]])
+    print("Sample processed label:", encoded_dataset["train"][0].get("labels"))
+    unique_labels = set([ex["labels"] for ex in encoded_dataset["train"]])
     print("Unique labels in training set:", unique_labels)
     import numpy as np
     input_vals = encoded_dataset["train"][0]["input_values"]
@@ -158,7 +158,7 @@ def run_hf_training(metadata_csv: str):
     print("All zeros in input_values?", np.all(np.array(input_vals) == 0))
     # Check label distribution
     from collections import Counter
-    print("Label distribution in training set:", Counter([ex["label"] for ex in encoded_dataset["train"]]))
+    print("Label distribution in training set:", Counter([ex["labels"] for ex in encoded_dataset["train"]]))
     # Check input shapes for first batch
     print("Shape of input_values for first 8 examples:")
     for i in range(8):
