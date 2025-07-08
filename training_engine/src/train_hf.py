@@ -28,7 +28,9 @@ MODEL_CHECKPOINT = "facebook/wav2vec2-base-960h"
 
 # Directory where the fine-tuned model and artifacts will be saved
 MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'e_commerce_model_hf')
+
 os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
+os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache"
 
 # --- Helper Functions ---
 
@@ -69,8 +71,12 @@ def load_and_prepare_dataset(metadata_csv_path: str):
     val_df.to_csv(val_csv_path, index=False)
 
     # Now load them
-    dataset = load_dataset('csv', data_files={'train': 'train.csv', 'eval': 'val.csv'},
-                           data_dir=os.path.dirname(metadata_csv_path))
+    dataset = load_dataset(
+        'csv',
+        data_files={'train': 'train.csv', 'eval': 'val.csv'},
+                           data_dir=os.path.dirname(metadata_csv_path),
+                           cache_dir="/tmp/hf_cache"
+    )
 
 
     # Cast the 'local_path' column to Audio, which automatically loads and resamples
