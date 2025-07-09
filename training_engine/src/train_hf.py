@@ -18,16 +18,32 @@ from transformers import (
     EarlyStoppingCallback,
 )
 import wandb
-from collections import Counter
-import matplotlib.pyplot as plt
-import seaborn as sns
+# from collections import Counter
+# import matplotlib.pyplot as plt
+# import seaborn as sns
 import torchaudio
 import random
+from audiomentations import Compose, AddGaussianNoise, TimeStretch, PitchShift
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Initialize wandb
-if not wandb.api.api_key:
-    os.environ["WANDB_API_KEY"] = "7037e1e9536dba5af8324bc01133b75b17c9193f"
-    wandb.login(key="7037e1e9536dba5af8324bc01133b75b17c9193f")
+# Fetch API key from environment variables or use the fallback
+wandb_api_key = os.getenv("WANDB_API_KEY")
+if not wandb_api_key:
+    wandb_api_key = "7037e1e9536dba5af8324bc01133b75b17c9193f"
+    logging.info("WANDB_API_KEY not found in environment, using fallback key.")
+
+try:
+    wandb.login(key=wandb_api_key)
+    logging.info("Successfully logged in to wandb.")
+except wandb.errors.UsageError:
+    logging.error("Failed to log in to wandb. Please check your API key.")
+    # Disable wandb if login fails
+    os.environ["WANDB_DISABLED"] = "true"
+    logging.warning("Continuing without wandb logging.")
 
 # --- Basic Configuration ---
 logging.basicConfig(
@@ -114,13 +130,16 @@ def filter_classes_by_frequency(df, min_samples=3):
 
     return filtered_df
 
+from tqdm import tqdm
+
 def augment_audio_data(df, target_samples_per_class=10):
     """
     Augment audio data using various techniques for underrepresented classes
     """
     augmented_rows = []
 
-    for class_label in df['prompt_text'].unique():
+    class_labels = df['prompt_text'].unique()
+    for class_label in tqdm(class_labels, desc="Augmenting audio data"):
         class_samples = df[df['prompt_text'] == class_label]
         current_count = len(class_samples)
         augmented_rows.extend(class_samples.to_dict('records'))
