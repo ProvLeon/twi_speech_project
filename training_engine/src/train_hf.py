@@ -520,7 +520,7 @@ def run_hf_training(metadata_csv: str):
         skip_memory_metrics=True,
         dataloader_prefetch_factor=2,
         gradient_checkpointing=True,  # Enable to save memory
-        evaluation_strategy="epoch",
+        # eval_strategy="epoch",
         logging_strategy="steps",
     )
 
