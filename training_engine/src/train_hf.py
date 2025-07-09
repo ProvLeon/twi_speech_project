@@ -21,8 +21,12 @@ import wandb
 from collections import Counter
 import matplotlib.pyplot as plt
 import seaborn as sns
+import torch.multiprocessing as mp
 
-# Initialize wandb if not already logged in
+# Set multiprocessing start method
+mp.set_start_method('spawn', force=True)
+
+# Initialize wandb
 if not wandb.api.api_key:
     os.environ["WANDB_API_KEY"] = "7037e1e9536dba5af8324bc01133b75b17c9193f"
     wandb.login(key="7037e1e9536dba5af8324bc01133b75b17c9193f")
@@ -47,7 +51,6 @@ MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'e_co
 
 os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
 os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # --- Helper Functions ---
 
@@ -239,17 +242,15 @@ def compute_metrics(eval_pred):
         "f1_macro": f1_macro
     }
 
-# Custom Data Collator with class weighting
+# Custom Data Collator
 class DataCollatorForWav2Vec2Classification:
     """
-    Data collator that handles padding and class weighting.
+    Data collator that handles padding.
     """
-    def __init__(self, feature_extractor, class_weights=None, padding=True, max_length=None):
+    def __init__(self, feature_extractor, padding=True, max_length=None):
         self.feature_extractor = feature_extractor
-        self.class_weights = class_weights
         self.padding = padding
         self.max_length = max_length
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def __call__(self, features):
         # Separate input_values and labels
@@ -267,11 +268,6 @@ class DataCollatorForWav2Vec2Classification:
         # Add labels to batch
         batch["labels"] = torch.tensor(labels, dtype=torch.long)
 
-        # Move tensors to device
-        for key in batch.keys():
-            if isinstance(batch[key], torch.Tensor):
-                batch[key] = batch[key].to(self.device)
-
         return batch
 
 # Custom Trainer with class weighting
@@ -280,7 +276,7 @@ class WeightedTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.class_weights = class_weights
 
-    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):  # Add **kwargs
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels = inputs.get("labels")
         outputs = model(**inputs)
         logits = outputs.get("logits")
@@ -290,7 +286,7 @@ class WeightedTrainer(Trainer):
             weight_tensor = torch.tensor(
                 [self.class_weights[i] for i in range(len(self.class_weights))],
                 dtype=torch.float,
-                device=labels.device
+                device=logits.device  # Use device from logits
             )
 
             # Compute weighted loss
@@ -338,18 +334,18 @@ def run_hf_training(metadata_csv: str):
     )
     logging.info("Dataset preprocessed for the model.")
 
-    # 4. Load the Model with better configuration
+    # 4. Load the Model with optimized configuration
     config = AutoConfig.from_pretrained(
         MODEL_CHECKPOINT,
         num_labels=len(label2id),
         label2id=label2id,
         id2label=id2label,
         finetuning_task="wav2vec2_clf",
-        layerdrop=0.1,  # Small dropout for regularization
-        mask_time_prob=0.05,  # Light masking
+        layerdrop=0.05,  # Reduced dropout
+        mask_time_prob=0.05,
         mask_feature_prob=0.05,
-        hidden_dropout=0.1,
-        attention_dropout=0.1,
+        hidden_dropout=0.05,  # Reduced dropout
+        attention_dropout=0.05,  # Reduced dropout
         classifier_dropout=0.1,
     )
 
@@ -363,8 +359,9 @@ def run_hf_training(metadata_csv: str):
     model.to(device)
     logging.info(f"Model moved to device: {device}")
 
-    # Freeze feature extractor but allow some adaptation
-    model.wav2vec2.feature_extractor._freeze_parameters()
+    # Partially freeze model - only freeze feature encoder
+    model.freeze_feature_encoder()
+    logging.info("Feature encoder frozen")
 
     # Initialize classification layers properly
     def init_classification_layers(model):
@@ -378,50 +375,46 @@ def run_hf_training(metadata_csv: str):
 
     init_classification_layers(model)
 
-    # 5. Setup data collator with class weights
+    # 5. Setup data collator
     data_collator = DataCollatorForWav2Vec2Classification(
         feature_extractor=feature_extractor,
-        class_weights=class_weights,
         padding=True,
         max_length=80000,  # 5 seconds at 16kHz
     )
 
-    # 6. Define improved training arguments
+    # 6. Define optimized training arguments
     training_args = TrainingArguments(
         output_dir=MODEL_OUTPUT_DIR,
-        per_device_train_batch_size=4,  # Increased batch size
-        per_device_eval_batch_size=4,
-        gradient_accumulation_steps=8,  # Adjusted for effective batch size
+        per_device_train_batch_size=8,  # Increased batch size
+        per_device_eval_batch_size=8,
+        gradient_accumulation_steps=4,  # Adjusted for effective batch size
         eval_strategy="steps",
         eval_steps=100,
         save_steps=200,
         logging_steps=25,
-        num_train_epochs=10,  # More epochs
-        fp16=False,
-        learning_rate=2e-5,  # Slightly higher learning rate
-        weight_decay=0.01,
-        warmup_steps=100,
-        max_grad_norm=1.0,  # Less aggressive clipping
-        dataloader_pin_memory=False,
+        num_train_epochs=15,  # Increased epochs
+        fp16=torch.cuda.is_available(),  # Enable if GPU supports it
+        learning_rate=1e-4,  # Higher initial learning rate
+        weight_decay=0.005,  # Reduced weight decay
+        warmup_steps=300,  # Increased warmup
+        max_grad_norm=0.5,  # Tighter gradient clipping
+        dataloader_pin_memory=True,
         remove_unused_columns=False,
-        save_total_limit=3,
+        save_total_limit=2,
         load_best_model_at_end=True,
         metric_for_best_model="f1_weighted",
         greater_is_better=True,
         report_to="wandb",
         adam_epsilon=1e-8,
         optim="adamw_torch",
-        lr_scheduler_type="cosine_with_restarts",
-        dataloader_num_workers=0,
+        lr_scheduler_type="linear",  # Simpler scheduler
+        dataloader_num_workers=4,
         seed=42,
         data_seed=42,
-        run_name="improved-wav2vec2-classification",
+        run_name="optimized-wav2vec2-classification",
         skip_memory_metrics=True,
-        dataloader_persistent_workers=False,
-        # Early stopping patience
-        # evaluation_strategy="steps",
-        # early_stopping_patience=5,
-        # early_stopping_threshold=0.01,
+        dataloader_prefetch_factor=2,
+        gradient_checkpointing=True,  # Save memory
     )
 
     # 7. Initialize the improved trainer
@@ -435,17 +428,20 @@ def run_hf_training(metadata_csv: str):
         class_weights=class_weights,
         callbacks=[
             LearningRateCallback(),
-            EarlyStoppingCallback(early_stopping_patience=5, early_stopping_threshold=0.01)
+            EarlyStoppingCallback(early_stopping_patience=7, early_stopping_threshold=0.005)  # More patience
         ],
     )
 
-    logging.info("Improved trainer initialized.")
+    logging.info("Optimized trainer initialized.")
 
     # 8. Test small batch
     logging.info("--- Testing small batch ---")
     try:
         small_batch = [encoded_dataset["train"][i] for i in range(2)]
         collated_batch = data_collator(small_batch)
+
+        # Move to device manually for test
+        collated_batch = {k: v.to(device) for k, v in collated_batch.items()}
 
         # Test forward pass
         model.eval()
@@ -457,7 +453,7 @@ def run_hf_training(metadata_csv: str):
         raise
 
     # 9. Start Training
-    logging.info("--- Starting Improved Training Loop ---")
+    logging.info("--- Starting Optimized Training Loop ---")
     try:
         trainer.train()
         logging.info("--- Training Complete ---")
@@ -492,13 +488,11 @@ def run_hf_training(metadata_csv: str):
     model.save_pretrained(MODEL_OUTPUT_DIR)
     feature_extractor.save_pretrained(MODEL_OUTPUT_DIR)
     logging.info(f"Model and artifacts saved to: {MODEL_OUTPUT_DIR}")
-    logging.info("Improved model training completed successfully!")
+    logging.info("Optimized model training completed successfully!")
 
 if __name__ == '__main__':
     import argparse
-    import torch.multiprocessing as mp
 
-    mp.set_start_method('spawn', force=True)
     parser = argparse.ArgumentParser(description="Fine-tune Wav2Vec2 with improvements.")
     parser.add_argument(
         '--metadata_csv',
