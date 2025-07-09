@@ -397,7 +397,7 @@ def run_hf_training(metadata_csv: str):
         save_steps=200,
         logging_steps=15,
         num_train_epochs=10,  # More epochs
-        fp16=True if torch.cuda.is_available() else False,
+        fp16=False,
         learning_rate=2e-5,  # Slightly higher learning rate
         weight_decay=0.01,
         warmup_steps=100,
