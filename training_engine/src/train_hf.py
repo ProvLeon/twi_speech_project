@@ -364,7 +364,7 @@ def run_hf_training(metadata_csv: str):
     logging.info(f"Model moved to device: {device}")
 
     # Freeze feature extractor but allow some adaptation
-    # model.wav2vec2.feature_extractor._freeze_parameters()
+    model.wav2vec2.feature_extractor._freeze_parameters()
 
     # Initialize classification layers properly
     def init_classification_layers(model):
