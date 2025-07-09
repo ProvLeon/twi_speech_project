@@ -389,19 +389,19 @@ def run_hf_training(metadata_csv: str):
     # 6. Define improved training arguments
     training_args = TrainingArguments(
         output_dir=MODEL_OUTPUT_DIR,
-        per_device_train_batch_size=8,  # Increased batch size
-        per_device_eval_batch_size=8,
-        gradient_accumulation_steps=4,  # Adjusted for effective batch size
+        per_device_train_batch_size=4,  # Increased batch size
+        per_device_eval_batch_size=4,
+        gradient_accumulation_steps=8,  # Adjusted for effective batch size
         eval_strategy="steps",
         eval_steps=100,
         save_steps=200,
         logging_steps=25,
-        num_train_epochs=15,  # More epochs
-        fp16=False, #torch.cuda.is_available(),
-        learning_rate=1e-4,  # Slightly higher learning rate
-        weight_decay=0.005,
+        num_train_epochs=10,  # More epochs
+        fp16=True if torch.cuda.is_available() else False,
+        learning_rate=2e-5,  # Slightly higher learning rate
+        weight_decay=0.01,
         warmup_steps=300,
-        max_grad_norm=0.5,  # Less aggressive clipping
+        max_grad_norm=1.0,  # Less aggressive clipping
         dataloader_pin_memory=False,
         remove_unused_columns=False,
         save_total_limit=3,
