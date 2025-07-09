@@ -47,6 +47,7 @@ MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'e_co
 
 os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
 os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # --- Helper Functions ---
 
@@ -411,7 +412,7 @@ def run_hf_training(metadata_csv: str):
         adam_epsilon=1e-8,
         optim="adamw_torch",
         lr_scheduler_type="cosine_with_restarts",
-        dataloader_num_workers=2,
+        dataloader_num_workers=0,
         seed=42,
         data_seed=42,
         run_name="improved-wav2vec2-classification",
