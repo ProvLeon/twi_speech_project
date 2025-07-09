@@ -451,7 +451,7 @@ class CustomTrainer(Trainer):
             lr=self.args.learning_rate,
             eps=self.args.adam_epsilon,
         )
-
+        self.optimizer = optimizer
         return optimizer
 
 # Learning rate scheduler callback
