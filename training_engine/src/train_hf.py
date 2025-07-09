@@ -134,12 +134,21 @@ from tqdm import tqdm
 
 def augment_audio_data(df, target_samples_per_class=10):
     """
-    Augment audio data using various techniques for underrepresented classes
+    Augment audio data using various techniques for underrepresented classes.
+    Avoid re-augmenting if enough augmented files already exist.
+    Track augmentations in the metadata with an 'is_augmented' column.
     """
+    import glob
+
     augmented_rows = []
+
+    # Ensure 'is_augmented' column exists
+    if 'is_augmented' not in df.columns:
+        df['is_augmented'] = False
 
     class_labels = df['prompt_text'].unique()
     for class_label in tqdm(class_labels, desc="Augmenting audio data"):
+        # Get all samples for this class (original + previously augmented)
         class_samples = df[df['prompt_text'] == class_label]
         current_count = len(class_samples)
         augmented_rows.extend(class_samples.to_dict('records'))
@@ -154,13 +163,36 @@ def augment_audio_data(df, target_samples_per_class=10):
                 apply_volume_change
             ]
 
+            # Only use original (non-augmented) samples for augmentation
+            orig_samples = class_samples[class_samples['is_augmented'] == False]
+            orig_count = len(orig_samples)
+            if orig_count == 0:
+                logging.warning(f"No original samples to augment for class '{class_label}'. Skipping augmentation.")
+                continue
+
             # Create multiple augmented versions
             for i in range(needed):
-                sample = class_samples.iloc[i % current_count].to_dict()
+                sample = orig_samples.iloc[i % orig_count].to_dict()
 
                 # Apply 1-3 random augmentations
                 num_augmentations = random.randint(1, 3)
                 audio_path = sample['local_path']
+
+                # Find next available augmentation index for this file
+                base, ext = os.path.splitext(audio_path)
+                existing_aug_files = glob.glob(base + "_aug*" + ext)
+                used_indices = set()
+                for f in existing_aug_files:
+                    idx_part = f.replace(base + "_aug", "").replace(ext, "")
+                    try:
+                        idx = int(idx_part)
+                        used_indices.add(idx)
+                    except Exception:
+                        continue
+                # Find the lowest unused index
+                aug_idx = 0
+                while aug_idx in used_indices:
+                    aug_idx += 1
 
                 try:
                     # Load audio
@@ -173,13 +205,23 @@ def augment_audio_data(df, target_samples_per_class=10):
                         audio = aug_func(audio)
 
                     # Save augmented audio
-                    aug_path = audio_path.replace(".wav", f"_aug{i}.wav")
-                    torchaudio.save(aug_path, torch.tensor(audio).unsqueeze(0), 16000)
-                    sample['local_path'] = aug_path
-                    augmented_rows.append(sample)
+                    aug_path = f"{base}_aug{aug_idx}{ext}"
+                    if not os.path.exists(aug_path):
+                        torchaudio.save(aug_path, torch.tensor(audio).unsqueeze(0), 16000)
+                        sample['local_path'] = aug_path
+                        sample['is_augmented'] = True
+                        augmented_rows.append(sample)
+                    else:
+                        logging.info(f"Augmented file {aug_path} already exists. Skipping creation.")
+                        # Still add to metadata if not already present
+                        if not ((df['local_path'] == aug_path) & (df['prompt_text'] == class_label)).any():
+                            sample['local_path'] = aug_path
+                            sample['is_augmented'] = True
+                            augmented_rows.append(sample)
                 except Exception as e:
                     logging.warning(f"Audio augmentation failed: {e}")
                     # Fallback to duplication
+                    sample['is_augmented'] = True
                     augmented_rows.append(sample)
 
     augmented_df = pd.DataFrame(augmented_rows)
@@ -189,6 +231,7 @@ def augment_audio_data(df, target_samples_per_class=10):
 def load_and_prepare_dataset(metadata_csv_path: str, min_samples_per_class=3, target_samples_per_class=8):
     """
     Loads the dataset from a CSV file, filters classes, and prepares it for training.
+    Tracks and deduplicates augmentations.
     """
     logging.info(f"Loading metadata from {metadata_csv_path}")
     df = pd.read_csv(metadata_csv_path)
@@ -197,15 +240,19 @@ def load_and_prepare_dataset(metadata_csv_path: str, min_samples_per_class=3, ta
     if 'local_path' not in df.columns or 'prompt_text' not in df.columns:
         raise ValueError("Metadata CSV must contain 'local_path' and 'prompt_text' columns.")
 
+    # Add 'is_augmented' column if missing
+    if 'is_augmented' not in df.columns:
+        df['is_augmented'] = df['local_path'].apply(lambda x: '_aug' in os.path.splitext(x)[0])
+
     # Analyze original distribution
     logging.info("=== Original Dataset Analysis ===")
     analyze_class_distribution(df)
 
-    # Filter classes with too few samples
+    # Filter classes with too few samples (counting all, including augmented)
     logging.info("=== Filtering Classes ===")
     df = filter_classes_by_frequency(df, min_samples=min_samples_per_class)
 
-    # Augment data to balance classes
+    # Augment data to balance classes, counting all (original + augmented)
     class_counts = df['prompt_text'].value_counts()
     if (class_counts < target_samples_per_class).any():
         logging.info("=== Augmenting Data ===")
