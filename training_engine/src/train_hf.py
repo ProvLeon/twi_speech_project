@@ -495,6 +495,9 @@ def run_hf_training(metadata_csv: str):
 
 if __name__ == '__main__':
     import argparse
+    import torch.multiprocessing as mp
+
+    mp.set_start_method('spawn', force=True)
     parser = argparse.ArgumentParser(description="Fine-tune Wav2Vec2 with improvements.")
     parser.add_argument(
         '--metadata_csv',
