@@ -25,8 +25,9 @@ import torchaudio
 import random
 
 # Initialize wandb
-os.environ["WANDB_API_KEY"] = "7037e1e9536dba5af8324bc01133b75b17c9193f"
-wandb.login(key="7037e1e9536dba5af8324bc01133b75b17c9193f")
+if not wandb.api.api_key:
+    os.environ["WANDB_API_KEY"] = "7037e1e9536dba5af8324bc01133b75b17c9193f"
+    wandb.login(key="7037e1e9536dba5af8324bc01133b75b17c9193f")
 
 # --- Basic Configuration ---
 logging.basicConfig(
