@@ -206,8 +206,12 @@ def load_and_prepare_dataset(metadata_csv_path: str, min_samples_per_class=3, ta
     df = filter_classes_by_frequency(df, min_samples=min_samples_per_class)
 
     # Augment data to balance classes
-    logging.info("=== Augmenting Data ===")
-    df = augment_audio_data(df, target_samples_per_class=target_samples_per_class)
+    class_counts = df['prompt_text'].value_counts()
+    if (class_counts < target_samples_per_class).any():
+        logging.info("=== Augmenting Data ===")
+        df = augment_audio_data(df, target_samples_per_class=target_samples_per_class)
+    else:
+        logging.info("All classes have enough samples. Skipping augmentation.")
 
     # Final analysis
     logging.info("=== Final Dataset Analysis ===")
