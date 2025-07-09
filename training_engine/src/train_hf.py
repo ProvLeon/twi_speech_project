@@ -397,10 +397,10 @@ def run_hf_training(metadata_csv: str):
         save_steps=200,
         logging_steps=25,
         num_train_epochs=10,  # More epochs
-        fp16=True if torch.cuda.is_available() else False,
+        fp16=False,
         learning_rate=2e-5,  # Slightly higher learning rate
         weight_decay=0.01,
-        warmup_steps=300,
+        warmup_steps=100,
         max_grad_norm=1.0,  # Less aggressive clipping
         dataloader_pin_memory=False,
         remove_unused_columns=False,
