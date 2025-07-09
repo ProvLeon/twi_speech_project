@@ -25,12 +25,16 @@ if not wandb.api.api_key:
 # --- Basic Configuration ---
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)2'
 )
 
 # Set random seeds for reproducibility
 torch.manual_seed(42)
 np.random.seed(42)
+
+# Device configuration - This is crucial for fixing the error
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+logging.info(f"Using device: {device}")
 
 # --- Hugging Face Model and Training Configuration ---
 MODEL_CHECKPOINT = "facebook/wav2vec2-base-960h"
@@ -133,16 +137,17 @@ def compute_metrics(eval_pred):
     f1 = f1_score(labels, predictions, average="weighted")
     return {"accuracy": acc, "f1": f1}
 
-# Custom Data Collator for Wav2Vec2
+# Custom Data Collator for Wav2Vec2 - FIXED WITH DEVICE HANDLING
 class DataCollatorForWav2Vec2Classification:
     """
-    Data collator that dynamically pads the inputs received.
+    Data collator that dynamically pads the inputs received and handles device placement.
     """
     def __init__(self, feature_extractor, padding=True, max_length=None, pad_to_multiple_of=None):
         self.feature_extractor = feature_extractor
         self.padding = padding
         self.max_length = max_length
         self.pad_to_multiple_of = pad_to_multiple_of
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def __call__(self, features):
         # Separate input_values and labels
@@ -160,6 +165,11 @@ class DataCollatorForWav2Vec2Classification:
 
         # Add labels to batch
         batch["labels"] = torch.tensor(labels, dtype=torch.long)
+
+        # CRUCIAL FIX: Move tensors to the same device as the model
+        for key in batch.keys():
+            if isinstance(batch[key], torch.Tensor):
+                batch[key] = batch[key].to(self.device)
 
         return batch
 
@@ -223,7 +233,7 @@ def run_hf_training(metadata_csv: str):
     print("Any NaNs in input_values?", np.isnan(input_vals).any())
     print("Any Infs in input_values?", np.isinf(input_vals).any())
 
-    # 4. Load the Model with better initialization
+    # 4. Load the Model with better initialization - MOVE TO DEVICE
     config = AutoConfig.from_pretrained(
         MODEL_CHECKPOINT,
         num_labels=len(label2id),
@@ -240,6 +250,10 @@ def run_hf_training(metadata_csv: str):
         config=config,
         ignore_mismatched_sizes=True
     )
+
+    # CRUCIAL FIX: Move model to the correct device
+    model.to(device)
+    logging.info(f"Model moved to device: {device}")
 
     # Freeze the feature extractor to prevent gradient explosion
     model.wav2vec2.feature_extractor._freeze_parameters()
@@ -303,6 +317,8 @@ def run_hf_training(metadata_csv: str):
         # Additional stability settings
         skip_memory_metrics=True,
         dataloader_persistent_workers=False,
+        # Force device placement
+        use_cpu=False if torch.cuda.is_available() else True,
     )
     logging.info("Training arguments configured.")
 
@@ -319,11 +335,19 @@ def run_hf_training(metadata_csv: str):
 
     logging.info("Trainer initialized.")
 
-    # 8. Test a small batch before full training
+    # 8. Test a small batch before full training - WITH DEVICE HANDLING
     logging.info("--- Testing small batch ---")
     try:
         small_batch = [encoded_dataset["train"][i] for i in range(2)]
         collated_batch = data_collator(small_batch)
+
+        # Verify device placement
+        print("Device verification:")
+        for key, value in collated_batch.items():
+            if isinstance(value, torch.Tensor):
+                print(f"  {key}: device={value.device}, dtype={value.dtype}")
+
+        print("Model device:", next(model.parameters()).device)
         print("Collated batch keys:", list(collated_batch.keys()))
         print("Input values shape:", collated_batch["input_values"].shape)
         print("Labels shape:", collated_batch["labels"].shape)
