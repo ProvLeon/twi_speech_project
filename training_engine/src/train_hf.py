@@ -174,15 +174,15 @@ def load_and_prepare_dataset(metadata_csv_path: str, augment=False):
         logging.info("Applying on-the-fly augmentation to the training set...")
         train_set = train_test_split['train'].map(
             lambda example: {'label_str': id2label[example['label']]},
-            num_proc=4  # Reduced from multiprocessing to avoid issues
+            num_proc=1  # Reduced from multiprocessing to avoid issues
         )
 
         augmented_train_dataset = train_set.map(
             augment_audio_data,
             fn_kwargs={"class_distribution": class_distribution, "target_classes": target_aug_classes},
             batched=True,
-            batch_size=16,  # Reduced batch size
-            num_proc=4
+            batch_size=4,  # Reduced batch size
+            num_proc=1
         )
         augmented_train_dataset = augmented_train_dataset.remove_columns(['label_str'])
         logging.info("Augmentation mapping complete.")
@@ -309,8 +309,8 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
     encoded_dataset = dataset.map(
         lambda x: preprocess_function(x, feature_extractor),
         batched=True,
-        batch_size=16,  # Reduced batch size
-        num_proc=4,  # Use single process to avoid multiprocessing issues
+        batch_size=4,  # Reduced batch size
+        num_proc=1,  # Use single process to avoid multiprocessing issues
         remove_columns=dataset["train"].column_names
     )
     logging.info("Dataset preprocessed for the model.")
