@@ -270,36 +270,7 @@ class DataCollatorForWav2Vec2Classification:
         return batch
 
 
-class CustomTrainer(Trainer):
-    """
-    Custom Trainer to implement layer-wise learning rates (discriminative fine-tuning).
-    """
-    def create_optimizer(self):
-        """
-        The classification head gets a higher learning rate than the pre-trained base model.
-        """
-        model = self.model
-        lr_head = self.args.learning_rate
-        lr_base = self.args.learning_rate / 20.0  # Use a much smaller LR for the base model
 
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in model.named_parameters() if "wav2vec2" in n and p.requires_grad],
-                "lr": lr_base,
-            },
-            {
-                "params": [p for n, p in model.named_parameters() if "wav2vec2" not in n],
-                "lr": lr_head,
-            },
-        ]
-
-        self.optimizer = AdamW(
-            optimizer_grouped_parameters,
-            lr=self.args.learning_rate, # This is a default, will be overridden by group LRs
-            eps=self.args.adam_epsilon
-        )
-        logging.info(f"Created AdamW optimizer with differential learning rates: Base LR={lr_base}, Head LR={lr_head}")
-        return self.optimizer
 
 class LearningRateCallback(TrainerCallback):
     def on_epoch_end(self, args, state, control, **kwargs):
@@ -404,8 +375,8 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         report_to="wandb",
     )
 
-    # 7. Initialize the Custom Trainer
-    trainer = CustomTrainer(
+    # 7. Initialize the Trainer
+    trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=encoded_dataset["train"],
