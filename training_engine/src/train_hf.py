@@ -7,7 +7,6 @@ import numpy as np
 from datasets import load_dataset, Audio, Dataset, DatasetDict, ClassLabel, Features, Value
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score
-from sklearn.utils.class_weight import compute_class_weight
 from torch.optim import AdamW
 from transformers import (
     AutoConfig,
@@ -167,12 +166,7 @@ def load_and_prepare_dataset(metadata_csv_path: str, augment=False):
     # Rename original text label column
     dataset_dict = dataset_dict.rename_column("prompt_text", "label_str")
 
-    # Compute class weights for handling imbalance in the loss function
-    y_train = dataset_dict["train"]["label"]
-    class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
-    class_weights = torch.tensor(class_weights, dtype=torch.float)
-
-    return dataset_dict, label2id, id2label, class_weights
+    return dataset_dict, label2id, id2label
 
 def preprocess_function(examples, feature_extractor, max_duration_s=5.0):
     """Preprocesses audio data for the Wav2Vec2 model with normalization."""
@@ -253,36 +247,16 @@ class DataCollatorForWav2Vec2Classification:
 
 
 class CustomTrainer(Trainer):
-    """Custom Trainer to implement a weighted loss function."""
-    def __init__(self, *args, class_weights=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.class_weights = class_weights.to(self.args.device) if class_weights is not None else None
-
-    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        """Overrides the default loss computation."""
-        labels = inputs.pop("labels")
-        outputs = model(**inputs)
-        logits = outputs.get("logits")
-
-        # Add a check for NaN logits to catch instability early
-        if torch.isnan(logits).any():
-            logging.error("NaN detected in model logits. Training cannot continue.")
-            raise RuntimeError("NaN logits detected. Check data and model stability.")
-
-        # Use weighted CrossEntropyLoss
-        loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights)
-        loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
-
-        return (loss, outputs) if return_outputs else loss
-
+    """
+    Custom Trainer to implement layer-wise learning rates (discriminative fine-tuning).
+    """
     def create_optimizer(self):
         """
-        Creates an optimizer with layer-wise learning rates (discriminative fine-tuning).
         The classification head gets a higher learning rate than the pre-trained base model.
         """
         model = self.model
         lr_head = self.args.learning_rate
-        lr_base = self.args.learning_rate / 20  # Use a much smaller LR for the base model
+        lr_base = self.args.learning_rate / 20.0  # Use a much smaller LR for the base model
 
         optimizer_grouped_parameters = [
             {
@@ -319,10 +293,10 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
     logging.info(f"--- Starting Optimized HF Model Fine-Tuning for {MODEL_CHECKPOINT} ---")
     wandb.init(project="twi-speech-e-commerce", name=f"optimized-run-{pd.Timestamp.now():%Y%m%d-%H%M}")
 
-    # 1. Load and prepare dataset, getting class weights
-    dataset, label2id, id2label, class_weights = load_and_prepare_dataset(metadata_csv, augment=augment_data)
+    # 1. Load and prepare dataset
+    dataset, label2id, id2label = load_and_prepare_dataset(metadata_csv, augment=augment_data)
     logging.info(f"Training set size: {len(dataset['train'])}, Validation set size: {len(dataset['eval'])}")
-    logging.info(f"Class weights computed for {len(class_weights)} classes.")
+
 
     # 2. Load Feature Extractor
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_CHECKPOINT)
@@ -376,8 +350,9 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         save_strategy="epoch",
         logging_steps=50,
         num_train_epochs=15, # More epochs because of augmentation
-        fp16=False, # Disabled fp16 to enforce numerical stability
-        gradient_checkpointing=False, # Disabled for maximum stability
+        fp16=False,
+        label_smoothing_factor=0.1, # Use label smoothing instead of class weights
+        gradient_checkpointing=False,
         max_grad_norm=1.0,
         learning_rate=5e-5, # A reasonable LR for the classification head
         weight_decay=0.01,
@@ -391,7 +366,7 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         report_to="wandb",
     )
 
-    # 6. Initialize the Custom Trainer
+    # 7. Initialize the Custom Trainer
     trainer = CustomTrainer(
         model=model,
         args=training_args,
@@ -399,7 +374,6 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         eval_dataset=encoded_dataset["eval"],
         data_collator=data_collator,
         compute_metrics=compute_metrics,
-        class_weights=class_weights,
         callbacks=[LearningRateCallback()]
     )
 
@@ -408,7 +382,7 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
     trainer.train()
     logging.info("--- Training Complete ---")
 
-    # 8. Final Evaluation and Model Saving
+    # 9. Final Evaluation and Model Saving
     logging.info("--- Starting Final Evaluation ---")
     eval_results = trainer.evaluate()
     logging.info(f"Final Evaluation Results: {eval_results}")
