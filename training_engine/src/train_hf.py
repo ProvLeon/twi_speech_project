@@ -16,9 +16,12 @@ from transformers import (
     TrainingArguments,
     TrainerCallback,
     DataCollatorWithPadding,
+    EarlyStoppingCallback,
 )
 import librosa
 import wandb
+import warnings
+warnings.filterwarnings("ignore")
 
 # --- Basic Configuration ---
 logging.basicConfig(
@@ -32,21 +35,39 @@ MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'e_co
 os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
 os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache_optimized"
 
+# Set environment variables to suppress CUDA warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
 # --- Audio Augmentation Functions ---
 
-def apply_noise(audio, noise_factor=0.005):
+def apply_noise(audio, noise_factor=0.003):
     """Adds random noise to the audio signal."""
+    if len(audio) == 0:
+        return audio
     noise = np.random.randn(len(audio))
     augmented_audio = audio + noise_factor * noise
     return augmented_audio
 
 def apply_pitch_shift(audio, sampling_rate, n_steps):
     """Shifts the pitch of the audio."""
-    return librosa.effects.pitch_shift(y=audio, sr=sampling_rate, n_steps=n_steps)
+    if len(audio) == 0:
+        return audio
+    try:
+        return librosa.effects.pitch_shift(y=audio, sr=sampling_rate, n_steps=n_steps)
+    except Exception as e:
+        logging.warning(f"Pitch shift failed: {e}")
+        return audio
 
 def apply_time_stretch(audio, rate):
     """Stretches the time of the audio without changing pitch."""
-    return librosa.effects.time_stretch(y=audio, rate=rate)
+    if len(audio) == 0:
+        return audio
+    try:
+        return librosa.effects.time_stretch(y=audio, rate=rate)
+    except Exception as e:
+        logging.warning(f"Time stretch failed: {e}")
+        return audio
 
 def apply_volume_change(audio, volume_factor):
     """Changes the volume of the audio."""
@@ -79,21 +100,18 @@ def augment_audio_data(batch, class_distribution, target_classes, sampling_rate=
             audio = audio_dicts[i]['array'].copy() # Work on a copy
             sr = audio_dicts[i]['sampling_rate']
 
-            choice = np.random.randint(0, 4)
+            # Apply lighter augmentation to avoid corruption
+            choice = np.random.randint(0, 3)  # Reduced from 4 to 3 choices
             if choice == 0:
-                audio = apply_noise(audio, noise_factor=np.random.uniform(0.003, 0.007))
+                audio = apply_noise(audio, noise_factor=np.random.uniform(0.001, 0.003))
             elif choice == 1:
-                audio = apply_pitch_shift(audio, sr, n_steps=np.random.uniform(-2, 2))
+                audio = apply_pitch_shift(audio, sr, n_steps=np.random.uniform(-1, 1))
             elif choice == 2:
-                # Avoid extreme stretching which can corrupt audio
-                audio = apply_time_stretch(audio, rate=np.random.uniform(0.9, 1.1))
-            elif choice == 3:
-                audio = apply_volume_change(audio, volume_factor=np.random.uniform(0.8, 1.2))
+                audio = apply_volume_change(audio, volume_factor=np.random.uniform(0.9, 1.1))
 
             # Update the array in the dictionary
             audio_dicts[i]['array'] = audio
 
-    # The whole batch dict is returned by map, with the 'local_path' column modified.
     return batch
 
 def load_and_prepare_dataset(metadata_csv_path: str, augment=False):
@@ -106,10 +124,29 @@ def load_and_prepare_dataset(metadata_csv_path: str, augment=False):
     if 'local_path' not in df.columns or 'prompt_text' not in df.columns:
         raise ValueError("Metadata CSV must contain 'local_path' and 'prompt_text' columns.")
 
+    # Filter out any rows with missing data
+    df = df.dropna(subset=['local_path', 'prompt_text'])
+
+    # Verify audio files exist
+    existing_files = []
+    for idx, row in df.iterrows():
+        if os.path.exists(row['local_path']):
+            existing_files.append(row)
+        else:
+            logging.warning(f"Audio file not found: {row['local_path']}")
+
+    if len(existing_files) == 0:
+        raise ValueError("No valid audio files found!")
+
+    df = pd.DataFrame(existing_files)
+    logging.info(f"Found {len(df)} valid audio files")
+
     # Create label mappings
     unique_labels = sorted(df['prompt_text'].unique())
     label2id = {label: i for i, label in enumerate(unique_labels)}
     id2label = {i: label for i, label in enumerate(unique_labels)}
+
+    logging.info(f"Found {len(unique_labels)} unique classes: {unique_labels}")
 
     label_map_path = os.path.join(MODEL_OUTPUT_DIR, 'label_map.json')
     with open(label_map_path, 'w') as f:
@@ -120,36 +157,33 @@ def load_and_prepare_dataset(metadata_csv_path: str, augment=False):
 
     # Analyze class distribution for weighting and augmentation targeting
     class_distribution = analyze_class_distribution(df)
-    target_aug_classes = filter_classes_by_frequency(class_distribution, min_samples=5) # Augment classes with less than 5 samples
+    target_aug_classes = filter_classes_by_frequency(class_distribution, min_samples=5)
     logging.info(f"Found {len(target_aug_classes)} classes with < 5 samples for targeted augmentation.")
 
     # Create Hugging Face Dataset
     dataset = Dataset.from_pandas(df)
     dataset = dataset.cast_column("label", ClassLabel(num_classes=len(unique_labels), names=unique_labels))
 
-    # IMPORTANT: Cast the audio column *before* splitting and augmentation.
-    # This ensures that all splits have a consistent data structure.
+    # Cast the audio column *before* splitting and augmentation
     dataset = dataset.cast_column("local_path", Audio(sampling_rate=16000))
 
     # Split first, then augment only the training set
     train_test_split = dataset.train_test_split(test_size=0.2, stratify_by_column="label", seed=42)
 
-    if augment:
+    if augment and len(target_aug_classes) > 0:
         logging.info("Applying on-the-fly augmentation to the training set...")
-        # We need the string label for our augmentation logic, so add it temporarily
         train_set = train_test_split['train'].map(
             lambda example: {'label_str': id2label[example['label']]},
-            num_proc=os.cpu_count() // 2 or 1
+            num_proc=1  # Reduced from multiprocessing to avoid issues
         )
 
         augmented_train_dataset = train_set.map(
             augment_audio_data,
             fn_kwargs={"class_distribution": class_distribution, "target_classes": target_aug_classes},
             batched=True,
-            batch_size=10, # Process in small batches
-            num_proc=os.cpu_count() // 2 or 1
+            batch_size=4,  # Reduced batch size
+            num_proc=1
         )
-        # Remove the temporary string label column
         augmented_train_dataset = augmented_train_dataset.remove_columns(['label_str'])
         logging.info("Augmentation mapping complete.")
 
@@ -169,35 +203,41 @@ def load_and_prepare_dataset(metadata_csv_path: str, augment=False):
     return dataset_dict, label2id, id2label
 
 def preprocess_function(examples, feature_extractor, max_duration_s=5.0):
-    """Preprocesses audio data for the Wav2Vec2 model with normalization."""
+    """Preprocesses audio data for the Wav2Vec2 model with robust normalization."""
     audio_arrays = [x["array"] for x in examples["local_path"]]
 
-    # Normalize audio to [-1, 1] range to prevent numerical instability
     processed_audio = []
     for audio in audio_arrays:
+        # Handle empty or invalid audio
+        if len(audio) == 0:
+            audio = np.zeros(int(feature_extractor.sampling_rate * 0.1))  # 0.1 second silence
+
         # Check for non-finite values and replace them
         if not np.isfinite(audio).all():
-            audio = np.nan_to_num(audio) # Replaces NaN with 0 and Inf with large numbers
+            audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
 
         # Remove DC offset
         audio = audio - np.mean(audio)
 
-        # Normalize with a small epsilon to prevent division by zero
+        # Robust normalization with clipping
         peak = np.abs(audio).max()
         if peak > 0:
-            audio = audio / (peak + 1e-9)
+            audio = audio / (peak + 1e-8)
+
+        # Clip to prevent extreme values
+        audio = np.clip(audio, -1.0, 1.0)
 
         processed_audio.append(audio)
-
 
     inputs = feature_extractor(
         processed_audio,
         sampling_rate=feature_extractor.sampling_rate,
         max_length=int(feature_extractor.sampling_rate * max_duration_s),
         truncation=True,
-        padding=False, # Collator will handle padding
+        padding=False,
         return_tensors="np"
     )
+
     return {"input_values": inputs.input_values, "labels": examples["label"]}
 
 def compute_metrics(eval_pred):
@@ -205,22 +245,14 @@ def compute_metrics(eval_pred):
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=-1)
     acc = accuracy_score(labels, predictions)
-    f1 = f1_score(labels, predictions, average="weighted")
+    f1 = f1_score(labels, predictions, average="weighted", zero_division=0)
     return {"accuracy": acc, "f1": f1}
 
-
-
-
-
 # Custom Data Collator for padding audio sequences
 class DataCollatorForWav2Vec2Classification:
     """
     Data collator that dynamically pads the inputs received, as well as the labels.
     """
-    feature_extractor: Wav2Vec2FeatureExtractor
-    padding: bool
-    max_length: int
-
     def __init__(self, feature_extractor: Wav2Vec2FeatureExtractor, padding: bool = True, max_length: int = None):
         self.feature_extractor = feature_extractor
         self.padding = padding
@@ -236,49 +268,17 @@ class DataCollatorForWav2Vec2Classification:
             max_length=self.max_length,
             return_tensors="pt",
         )
-        batch["labels"] = torch.tensor(label_features)
+        batch["labels"] = torch.tensor(label_features, dtype=torch.long)
 
         return batch
-
-
-# Custom Data Collator for padding audio sequences
-class DataCollatorForWav2Vec2Classification:
-    """
-    Data collator that dynamically pads the inputs received, as well as the labels.
-    """
-    feature_extractor: Wav2Vec2FeatureExtractor
-    padding: bool
-    max_length: int
-
-    def __init__(self, feature_extractor: Wav2Vec2FeatureExtractor, padding: bool = True, max_length: int = None):
-        self.feature_extractor = feature_extractor
-        self.padding = padding
-        self.max_length = max_length
-
-    def __call__(self, features):
-        input_features = [{"input_values": feature["input_values"]} for feature in features]
-        label_features = [feature["labels"] for feature in features]
-
-        batch = self.feature_extractor.pad(
-            input_features,
-            padding=self.padding,
-            max_length=self.max_length,
-            return_tensors="pt",
-        )
-        batch["labels"] = torch.tensor(label_features)
-
-        return batch
-
-
-
 
 class LearningRateCallback(TrainerCallback):
     def on_epoch_end(self, args, state, control, **kwargs):
-        # Log learning rate at the end of each epoch
         if state.is_world_process_zero:
-            optimizer = kwargs['optimizer']
-            for i, param_group in enumerate(optimizer.param_groups):
-                wandb.log({f"learning_rate_group_{i}": param_group['lr'], "epoch": state.epoch})
+            optimizer = kwargs.get('optimizer')
+            if optimizer:
+                for i, param_group in enumerate(optimizer.param_groups):
+                    wandb.log({f"learning_rate_group_{i}": param_group['lr'], "epoch": state.epoch})
 
 # --- Main Orchestration ---
 def run_hf_training(metadata_csv: str, augment_data: bool):
@@ -286,62 +286,64 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
     Orchestrates the entire fine-tuning pipeline.
     """
     logging.info(f"--- Starting Optimized HF Model Fine-Tuning for {MODEL_CHECKPOINT} ---")
-    wandb.init(project="twi-speech-e-commerce", name=f"optimized-run-{pd.Timestamp.now():%Y%m%d-%H%M}")
+
+    # Initialize wandb with better error handling
+    try:
+        wandb.init(
+            project="twi-speech-e-commerce",
+            name=f"optimized-run-{pd.Timestamp.now():%Y%m%d-%H%M}",
+            reinit=True
+        )
+    except Exception as e:
+        logging.warning(f"Wandb initialization failed: {e}")
+        os.environ["WANDB_DISABLED"] = "true"
 
     # 1. Load and prepare dataset
     dataset, label2id, id2label = load_and_prepare_dataset(metadata_csv, augment=augment_data)
     logging.info(f"Training set size: {len(dataset['train'])}, Validation set size: {len(dataset['eval'])}")
 
-
     # 2. Load Feature Extractor
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_CHECKPOINT)
 
     # 3. Preprocess the dataset
-    # After augmentation, the 'local_path' column now contains the dictionary with the audio array
     encoded_dataset = dataset.map(
         lambda x: preprocess_function(x, feature_extractor),
         batched=True,
-        batch_size=8,
-        num_proc=os.cpu_count() // 2 or 1,
-        remove_columns=dataset["train"].column_names # Keep only input_values and labels
+        batch_size=4,  # Reduced batch size
+        num_proc=1,  # Use single process to avoid multiprocessing issues
+        remove_columns=dataset["train"].column_names
     )
     logging.info("Dataset preprocessed for the model.")
 
-    # 4. Load the Model with a new head
+    # 4. Load the Model with proper configuration
     config = AutoConfig.from_pretrained(
         MODEL_CHECKPOINT,
         num_labels=len(label2id),
         label2id=label2id,
         id2label=id2label,
         finetuning_task="wav2vec2_clf",
+        hidden_dropout=0.1,
+        attention_dropout=0.1,
+        feat_proj_dropout=0.0,
+        layerdrop=0.1,
     )
-    model = Wav2Vec2ForSequenceClassification.from_pretrained(MODEL_CHECKPOINT, config=config, ignore_mismatched_sizes=True)
-    model = model.to(torch.float32) # Ensure model is in float32
-    logging.info("Model loaded and cast to float32.")
 
-    # Freeze the feature encoder
+    model = Wav2Vec2ForSequenceClassification.from_pretrained(
+        MODEL_CHECKPOINT,
+        config=config,
+        ignore_mismatched_sizes=True
+    )
+
+    # Ensure model is in float32 and move to device
+    model = model.float()
+    if torch.cuda.is_available():
+        model = model.cuda()
+
+    logging.info("Model loaded and configured.")
+
+    # Freeze the feature encoder for initial training
     model.freeze_feature_encoder()
     logging.info("Froze feature encoder.")
-
-    # --- Debugging: Perform a dummy forward pass in eval mode for stability ---
-    logging.info("Performing warm-up forward pass in evaluation mode...")
-    model.eval()
-    try:
-        # Create a dummy input batch (e.g., 2 samples of 1 second silence)
-        dummy_input_values = torch.zeros(2, 16000, dtype=torch.float32)
-        dummy_labels = torch.zeros(2, dtype=torch.long)
-        dummy_batch = {
-            "input_values": dummy_input_values,
-            "labels": dummy_labels
-        }
-        with torch.no_grad():
-            _ = model(**dummy_batch) # Perform a forward pass
-        logging.info("Warm-up forward pass completed successfully.")
-    except Exception as e:
-        logging.error(f"Warm-up forward pass failed: {e}")
-        raise
-    model.train() # Set model back to train mode
-    # --- End Debugging Block ---
 
     # 5. Setup custom data collator
     data_collator = DataCollatorForWav2Vec2Classification(
@@ -349,30 +351,37 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         padding=True,
     )
 
-    # 6. Define Training Arguments
+    # 6. Define Training Arguments with conservative settings
     training_args = TrainingArguments(
         output_dir=MODEL_OUTPUT_DIR,
-        per_device_train_batch_size=8,
-        per_device_eval_batch_size=8,
-        gradient_accumulation_steps=2, # Effective batch size = 16
+        per_device_train_batch_size=4,  # Reduced batch size
+        per_device_eval_batch_size=4,
+        gradient_accumulation_steps=4,  # Increased to maintain effective batch size
         eval_strategy="epoch",
         save_strategy="epoch",
-        logging_steps=50,
-        num_train_epochs=15, # More epochs because of augmentation
-        fp16=False,
-        label_smoothing_factor=0.1, # Use label smoothing instead of class weights
-        gradient_checkpointing=True, # Re-enable for memory saving and potential stability
-        max_grad_norm=1.0,
-        learning_rate=5e-5, # A reasonable LR for the classification head
+        logging_steps=25,
+        num_train_epochs=10,  # Reduced epochs
+        fp16=False,  # Keep FP16 disabled
+        dataloader_pin_memory=False,
+        dataloader_num_workers=0,  # Disable multiprocessing
+        label_smoothing_factor=0.1,
+        gradient_checkpointing=False,  # Disable to avoid potential issues
+        max_grad_norm=0.5,  # Reduced gradient clipping
+        learning_rate=1e-5,  # Much lower learning rate
         weight_decay=0.01,
-        warmup_ratio=0.1,
+        warmup_ratio=0.2,  # Increased warmup
         lr_scheduler_type='cosine',
-        adam_epsilon=1e-6, # Stabilize optimizer
-        save_total_limit=3,
+        adam_epsilon=1e-8,
+        adam_beta1=0.9,
+        adam_beta2=0.999,
+        save_total_limit=2,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         greater_is_better=True,
-        report_to="wandb",
+        report_to="wandb" if not os.environ.get("WANDB_DISABLED") else None,
+        seed=42,
+        push_to_hub=False,
+        remove_unused_columns=False,
     )
 
     # 7. Initialize the Trainer
@@ -383,25 +392,41 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         eval_dataset=encoded_dataset["eval"],
         data_collator=data_collator,
         compute_metrics=compute_metrics,
-        callbacks=[LearningRateCallback()]
+        callbacks=[
+            LearningRateCallback(),
+            EarlyStoppingCallback(early_stopping_patience=3)
+        ]
     )
 
-    # 8. Start Training
+    # 8. Start Training with error handling
     logging.info("--- Starting Training Loop ---")
-    trainer.train()
-    logging.info("--- Training Complete ---")
+    try:
+        trainer.train()
+        logging.info("--- Training Complete ---")
+    except Exception as e:
+        logging.error(f"Training failed with error: {e}")
+        raise
 
     # 9. Final Evaluation and Model Saving
     logging.info("--- Starting Final Evaluation ---")
-    eval_results = trainer.evaluate()
-    logging.info(f"Final Evaluation Results: {eval_results}")
-    wandb.log({"final_eval_results": eval_results})
+    try:
+        eval_results = trainer.evaluate()
+        logging.info(f"Final Evaluation Results: {eval_results}")
+        if not os.environ.get("WANDB_DISABLED"):
+            wandb.log({"final_eval_results": eval_results})
+    except Exception as e:
+        logging.error(f"Final evaluation failed: {e}")
 
-    trainer.save_model(MODEL_OUTPUT_DIR)
-    feature_extractor.save_pretrained(MODEL_OUTPUT_DIR)
-    logging.info(f"Fine-tuned model and artifacts saved to: {MODEL_OUTPUT_DIR}")
-    wandb.finish()
+    # Save model
+    try:
+        trainer.save_model(MODEL_OUTPUT_DIR)
+        feature_extractor.save_pretrained(MODEL_OUTPUT_DIR)
+        logging.info(f"Fine-tuned model and artifacts saved to: {MODEL_OUTPUT_DIR}")
+    except Exception as e:
+        logging.error(f"Model saving failed: {e}")
 
+    if not os.environ.get("WANDB_DISABLED"):
+        wandb.finish()
 
 if __name__ == '__main__':
     import argparse
@@ -419,11 +444,15 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    # It's good practice to log in to wandb at the start
-    if not wandb.api.api_key:
+    # Handle wandb authentication
+    if not os.environ.get("WANDB_DISABLED"):
         api_key = os.environ.get("WANDB_API_KEY")
         if api_key:
-            wandb.login(key=api_key)
+            try:
+                wandb.login(key=api_key)
+            except Exception as e:
+                logging.warning(f"Wandb login failed: {e}. Disabling wandb.")
+                os.environ["WANDB_DISABLED"] = "true"
         else:
             logging.warning("WANDB_API_KEY not found. Wandb logging will be disabled.")
             os.environ["WANDB_DISABLED"] = "true"
