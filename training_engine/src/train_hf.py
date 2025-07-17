@@ -4,9 +4,9 @@ import json
 import torch
 import pandas as pd
 import numpy as np
-from datasets import load_dataset, Audio
+from datasets import load_dataset, Audio, Dataset, DatasetDict, ClassLabel, Features, Value
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, f1_score, classification_report
+from sklearn.metrics import accuracy_score, f1_score
 from sklearn.utils.class_weight import compute_class_weight
 from transformers import (
     AutoConfig,
@@ -14,36 +14,12 @@ from transformers import (
     Wav2Vec2ForSequenceClassification,
     Trainer,
     TrainingArguments,
-    TrainerCallback,
-    EarlyStoppingCallback,
+    AdamW,
+    get_linear_schedule_with_warmup,
+    TrainerCallback
 )
+import librosa
 import wandb
-# from collections import Counter
-# import matplotlib.pyplot as plt
-# import seaborn as sns
-import torchaudio
-import random
-from audiomentations import Compose, AddGaussianNoise, TimeStretch, PitchShift
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
-
-# Initialize wandb
-# Fetch API key from environment variables or use the fallback
-wandb_api_key = os.getenv("WANDB_API_KEY")
-if not wandb_api_key:
-    wandb_api_key = "7037e1e9536dba5af8324bc01133b75b17c9193f"
-    logging.info("WANDB_API_KEY not found in environment, using fallback key.")
-
-try:
-    wandb.login(key=wandb_api_key)
-    logging.info("Successfully logged in to wandb.")
-except wandb.errors.UsageError:
-    logging.error("Failed to log in to wandb. Please check your API key.")
-    # Disable wandb if login fails
-    os.environ["WANDB_DISABLED"] = "true"
-    logging.warning("Continuing without wandb logging.")
 
 # --- Basic Configuration ---
 logging.basicConfig(
@@ -51,617 +27,349 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# Set random seeds for reproducibility
-torch.manual_seed(42)
-np.random.seed(42)
-random.seed(42)
-
-# Device configuration
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-logging.info(f"Using device: {device}")
-
 # --- Hugging Face Model and Training Configuration ---
 MODEL_CHECKPOINT = "facebook/wav2vec2-base-960h"
-MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'e_commerce_model_hf')
-
+MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'e_commerce_model_hf_optimized')
 os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
-os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache"
+os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache_optimized"
 
 # --- Audio Augmentation Functions ---
-def apply_noise(audio, noise_level=0.005):
-    """Add Gaussian noise to audio"""
-    noise = np.random.normal(0, noise_level, audio.shape)
-    return audio + noise
 
-def apply_pitch_shift(audio, sample_rate, max_shift=2):
-    """Shift pitch of audio"""
-    shift = random.uniform(-max_shift, max_shift)
-    return torchaudio.functional.pitch_shift(
-        torch.tensor(audio).unsqueeze(0),
-        sample_rate,
-        shift
-    ).squeeze(0).numpy()
+def apply_noise(audio, noise_factor=0.005):
+    """Adds random noise to the audio signal."""
+    noise = np.random.randn(len(audio))
+    augmented_audio = audio + noise_factor * noise
+    return augmented_audio
 
-def apply_time_stretch(audio, min_factor=0.8, max_factor=1.2):
-    """Time stretch audio"""
-    factor = random.uniform(min_factor, max_factor)
-    return torchaudio.functional.resample(
-        torch.tensor(audio).unsqueeze(0),
-        16000,
-        int(16000 * factor)
-    ).squeeze(0).numpy()
+def apply_pitch_shift(audio, sampling_rate, n_steps):
+    """Shifts the pitch of the audio."""
+    return librosa.effects.pitch_shift(y=audio, sr=sampling_rate, n_steps=n_steps)
 
-def apply_volume_change(audio, min_gain=0.7, max_gain=1.3):
-    """Change volume of audio"""
-    gain = random.uniform(min_gain, max_gain)
-    return audio * gain
+def apply_time_stretch(audio, rate):
+    """Stretches the time of the audio without changing pitch."""
+    return librosa.effects.time_stretch(y=audio, rate=rate)
 
-# --- Helper Functions ---
+def apply_volume_change(audio, volume_factor):
+    """Changes the volume of the audio."""
+    return audio * volume_factor
 
-def analyze_class_distribution(df):
-    """Analyze and visualize class distribution"""
-    class_counts = df['prompt_text'].value_counts()
+def analyze_class_distribution(df, column='prompt_text'):
+    """Analyzes and prints the distribution of classes."""
+    distribution = df[column].value_counts()
+    logging.info("Class Distribution:\n" + str(distribution))
+    return distribution
 
-    logging.info(f"Total classes: {len(class_counts)}")
-    logging.info(f"Total samples: {len(df)}")
-    logging.info(f"Average samples per class: {len(df) / len(class_counts):.2f}")
-    logging.info(f"Min samples per class: {class_counts.min()}")
-    logging.info(f"Max samples per class: {class_counts.max()}")
-
-    # Classes with very few samples
-    rare_classes = class_counts[class_counts < 3]
-    logging.info(f"Classes with < 3 samples: {len(rare_classes)}")
-
-    # Classes with only 1 sample
-    singleton_classes = class_counts[class_counts == 1]
-    logging.info(f"Classes with only 1 sample: {len(singleton_classes)}")
-
-    return class_counts
-
-def filter_classes_by_frequency(df, min_samples=3):
-    """Filter out classes with too few samples"""
-    class_counts = df['prompt_text'].value_counts()
-    valid_classes = class_counts[class_counts >= min_samples].index
-
-    filtered_df = df[df['prompt_text'].isin(valid_classes)].copy()
-
-    logging.info(f"Filtered from {len(df)} to {len(filtered_df)} samples")
-    logging.info(f"Filtered from {df['prompt_text'].nunique()} to {filtered_df['prompt_text'].nunique()} classes")
-
-    return filtered_df
-
-from tqdm import tqdm
-
-def augment_audio_data(df, target_samples_per_class=10):
+def filter_classes_by_frequency(class_distribution, min_samples=3):
     """
-    Augment audio data using various techniques for underrepresented classes.
-    Avoid re-augmenting if enough augmented files already exist.
-    Track augmentations in the metadata with an 'is_augmented' column.
+    Identifies classes with fewer samples than min_samples.
+    These are candidates for augmentation.
     """
-    import glob
+    return class_distribution[class_distribution < min_samples].index.tolist()
 
-    augmented_rows = []
-
-    # Ensure 'is_augmented' column exists
-    if 'is_augmented' not in df.columns:
-        df['is_augmented'] = False
-
-    class_labels = df['prompt_text'].unique()
-    for class_label in tqdm(class_labels, desc="Augmenting audio data"):
-        # Get all samples for this class (original + previously augmented)
-        class_samples = df[df['prompt_text'] == class_label]
-        current_count = len(class_samples)
-        augmented_rows.extend(class_samples.to_dict('records'))
-
-        # If we need more samples, create augmented versions
-        if current_count < target_samples_per_class:
-            needed = target_samples_per_class - current_count
-            augmentation_functions = [
-                apply_noise,
-                lambda x: apply_pitch_shift(x, 16000),
-                apply_time_stretch,
-                apply_volume_change
-            ]
-
-            # Only use original (non-augmented) samples for augmentation
-            orig_samples = class_samples[class_samples['is_augmented'] == False]
-            orig_count = len(orig_samples)
-            if orig_count == 0:
-                logging.warning(f"No original samples to augment for class '{class_label}'. Skipping augmentation.")
-                continue
-
-            # Create multiple augmented versions
-            for i in range(needed):
-                sample = orig_samples.iloc[i % orig_count].to_dict()
-
-                # Apply 1-3 random augmentations
-                num_augmentations = random.randint(1, 3)
-                audio_path = sample['local_path']
-
-                # Find next available augmentation index for this file
-                base, ext = os.path.splitext(audio_path)
-                existing_aug_files = glob.glob(base + "_aug*" + ext)
-                used_indices = set()
-                for f in existing_aug_files:
-                    idx_part = f.replace(base + "_aug", "").replace(ext, "")
-                    try:
-                        idx = int(idx_part)
-                        used_indices.add(idx)
-                    except Exception:
-                        continue
-                # Find the lowest unused index
-                aug_idx = 0
-                while aug_idx in used_indices:
-                    aug_idx += 1
-
-                try:
-                    # Load audio
-                    audio, sr = torchaudio.load(audio_path)
-                    audio = audio.numpy().squeeze()
-
-                    # Apply augmentations
-                    for _ in range(num_augmentations):
-                        aug_func = random.choice(augmentation_functions)
-                        audio = aug_func(audio)
-
-                    # Save augmented audio
-                    aug_path = f"{base}_aug{aug_idx}{ext}"
-                    if not os.path.exists(aug_path):
-                        torchaudio.save(aug_path, torch.tensor(audio).unsqueeze(0), 16000)
-                        sample['local_path'] = aug_path
-                        sample['is_augmented'] = True
-                        augmented_rows.append(sample)
-                    else:
-                        logging.info(f"Augmented file {aug_path} already exists. Skipping creation.")
-                        # Still add to metadata if not already present
-                        if not ((df['local_path'] == aug_path) & (df['prompt_text'] == class_label)).any():
-                            sample['local_path'] = aug_path
-                            sample['is_augmented'] = True
-                            augmented_rows.append(sample)
-                except Exception as e:
-                    logging.warning(f"Audio augmentation failed: {e}")
-                    # Fallback to duplication
-                    sample['is_augmented'] = True
-                    augmented_rows.append(sample)
-
-    augmented_df = pd.DataFrame(augmented_rows)
-    logging.info(f"Augmented dataset from {len(df)} to {len(augmented_df)} samples")
-    return augmented_df
-
-def load_and_prepare_dataset(metadata_csv_path: str, min_samples_per_class=3, target_samples_per_class=8):
+def augment_audio_data(batch, class_distribution, target_classes, sampling_rate=16000):
     """
-    Loads the dataset from a CSV file, filters classes, and prepares it for training.
-    Tracks and deduplicates augmentations.
+    Applies augmentation to a batch of audio data, focusing on underrepresented classes.
+    This function is designed to be used with `dataset.map()`.
+    """
+    augmented_audios = []
+    audio_paths = batch["local_path"]
+    labels = batch["label_str"]  # Using string labels to check against target classes
+
+    for audio_path, label in zip(audio_paths, labels):
+        # Load audio file
+        try:
+            audio, sr = librosa.load(audio_path, sr=sampling_rate, mono=True)
+        except Exception as e:
+            logging.warning(f"Could not load audio file {audio_path}: {e}. Skipping.")
+            # Append a placeholder or handle as appropriate. Here, we append zeros.
+            augmented_audios.append(np.zeros(sampling_rate * 1)) # 1 second of silence
+            continue
+
+        # Augment only if the class is in our target list of underrepresented classes
+        if label in target_classes:
+            choice = np.random.randint(0, 4)
+            if choice == 0:
+                audio = apply_noise(audio, noise_factor=np.random.uniform(0.003, 0.007))
+            elif choice == 1:
+                audio = apply_pitch_shift(audio, sampling_rate, n_steps=np.random.uniform(-2, 2))
+            elif choice == 2:
+                # Avoid extreme stretching which can corrupt audio
+                audio = apply_time_stretch(audio, rate=np.random.uniform(0.9, 1.1))
+            elif choice == 3:
+                audio = apply_volume_change(audio, volume_factor=np.random.uniform(0.8, 1.2))
+
+        augmented_audios.append(audio)
+
+    # The key here should match the one expected by preprocess_function
+    # We will rename 'local_path' to 'audio' and place the augmented array there.
+    batch["audio"] = [{"path": path, "array": arr, "sampling_rate": sampling_rate} for path, arr in zip(audio_paths, augmented_audios)]
+    return batch
+
+def load_and_prepare_dataset(metadata_csv_path: str, augment=False):
+    """
+    Loads, prepares, and optionally augments the dataset.
     """
     logging.info(f"Loading metadata from {metadata_csv_path}")
     df = pd.read_csv(metadata_csv_path)
 
-    # Ensure required columns exist
     if 'local_path' not in df.columns or 'prompt_text' not in df.columns:
         raise ValueError("Metadata CSV must contain 'local_path' and 'prompt_text' columns.")
-
-    # Add 'is_augmented' column if missing
-    if 'is_augmented' not in df.columns:
-        df['is_augmented'] = df['local_path'].apply(lambda x: '_aug' in os.path.splitext(x)[0])
-
-    # Analyze original distribution
-    logging.info("=== Original Dataset Analysis ===")
-    analyze_class_distribution(df)
-
-    # Filter classes with too few samples (counting all, including augmented)
-    logging.info("=== Filtering Classes ===")
-    df = filter_classes_by_frequency(df, min_samples=min_samples_per_class)
-
-    # Augment data to balance classes, counting all (original + augmented)
-    class_counts = df['prompt_text'].value_counts()
-    if (class_counts < target_samples_per_class).any():
-        logging.info("=== Augmenting Data ===")
-        df = augment_audio_data(df, target_samples_per_class=target_samples_per_class)
-    else:
-        logging.info("All classes have enough samples. Skipping augmentation.")
-
-    # Final analysis
-    logging.info("=== Final Dataset Analysis ===")
-    analyze_class_distribution(df)
 
     # Create label mappings
     unique_labels = sorted(df['prompt_text'].unique())
     label2id = {label: i for i, label in enumerate(unique_labels)}
     id2label = {i: label for i, label in enumerate(unique_labels)}
 
-    # Save the label map
     label_map_path = os.path.join(MODEL_OUTPUT_DIR, 'label_map.json')
     with open(label_map_path, 'w') as f:
         json.dump({"label2id": label2id, "id2label": id2label}, f, indent=4)
     logging.info(f"Label map saved to {label_map_path}")
 
-    # Map string labels to integer IDs in the DataFrame
     df["label"] = df["prompt_text"].map(label2id)
 
-    # Split the data using stratified sampling
-    train_df, eval_df = train_test_split(
-        df,
-        test_size=0.15,  # Smaller test size for small dataset
-        stratify=df['label'],
-        random_state=42
-    )
+    # Analyze class distribution for weighting and augmentation targeting
+    class_distribution = analyze_class_distribution(df)
+    target_aug_classes = filter_classes_by_frequency(class_distribution, min_samples=5) # Augment classes with less than 5 samples
+    logging.info(f"Found {len(target_aug_classes)} classes with < 5 samples for targeted augmentation.")
 
-    # Create datasets from the split DataFrames
-    from datasets import Dataset, DatasetDict
-    dataset_dict = DatasetDict({
-        'train': Dataset.from_pandas(train_df.reset_index(drop=True)),
-        'eval': Dataset.from_pandas(eval_df.reset_index(drop=True))
-    })
+    # Create Hugging Face Dataset
+    dataset = Dataset.from_pandas(df)
+    dataset = dataset.cast_column("label", ClassLabel(num_classes=len(unique_labels), names=unique_labels))
 
-    # Cast the 'local_path' column to Audio
-    dataset_dict = dataset_dict.cast_column("local_path", Audio(sampling_rate=16000))
+    # Split first, then augment only the training set
+    train_test_split = dataset.train_test_split(test_size=0.2, stratify_by_column="label", seed=42)
+
+    if augment:
+        logging.info("Applying augmentation to the training set...")
+        # We pass string labels to the augmentation function to make logic simpler
+        train_df = train_test_split['train'].to_pandas()
+        train_df['label_str'] = train_df['label'].map(id2label)
+
+        # Create a temporary dataset to map the augmentation function
+        temp_train_dataset = Dataset.from_pandas(train_df)
+
+        # This is memory intensive as it loads all audio to augment
+        augmented_train_dataset = temp_train_dataset.map(
+            augment_audio_data,
+            fn_kwargs={"class_distribution": class_distribution, "target_classes": target_aug_classes},
+            batched=True,
+            batch_size=10, # Process in small batches
+            num_proc=os.cpu_count() // 2 or 1,
+            remove_columns=['local_path'] # Remove original path, we use the 'audio' dict now
+        )
+        logging.info("Augmentation complete.")
+
+        # Rename the 'audio' column to 'local_path' to match the original structure for subsequent steps
+        augmented_train_dataset = augmented_train_dataset.rename_column("audio", "local_path")
+
+        dataset_dict = DatasetDict({
+            'train': augmented_train_dataset,
+            'eval': train_test_split['test']
+        })
+    else:
+        dataset_dict = DatasetDict({
+            'train': train_test_split['train'],
+            'eval': train_test_split['test']
+        })
+
+    # Rename original text label column
     dataset_dict = dataset_dict.rename_column("prompt_text", "label_str")
 
-    # Compute class weights for handling imbalance
-    class_weights = compute_class_weight(
-        'balanced',
-        classes=np.unique(train_df['label']),
-        y=train_df['label']
-    )
-    class_weights_dict = {i: weight for i, weight in enumerate(class_weights)}
+    # Compute class weights for handling imbalance in the loss function
+    y_train = dataset_dict["train"]["label"]
+    class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+    class_weights = torch.tensor(class_weights, dtype=torch.float)
 
-    return dataset_dict, label2id, id2label, class_weights_dict
+    return dataset_dict, label2id, id2label, class_weights
 
-def preprocess_function(examples, feature_extractor, max_duration_s=5):
-    """
-    Preprocesses audio data for the Wav2Vec2 model with better normalization.
-    """
+def preprocess_function(examples, feature_extractor, max_duration_s=5.0):
+    """Preprocesses audio data for the Wav2Vec2 model."""
     audio_arrays = [x["array"] for x in examples["local_path"]]
-
-    # Improved audio normalization
-    normalized_audio = []
-    for audio in audio_arrays:
-        if len(audio) > 0:
-            # Remove DC offset
-            audio = audio - np.mean(audio)
-
-            # Normalize to [-1, 1] range with small epsilon to prevent division by zero
-            max_val = np.max(np.abs(audio))
-            if max_val > 0:
-                audio_norm = audio / max_val
-            else:
-                audio_norm = audio
-
-            # Apply gentle clipping
-            audio_norm = np.clip(audio_norm, -0.95, 0.95)
-            normalized_audio.append(audio_norm)
-        else:
-            # Handle empty audio with small noise instead of silence
-            normalized_audio.append(np.random.normal(0, 0.001, 1600))
-
-    # Process audio with feature extractor
     inputs = feature_extractor(
-        normalized_audio,
+        audio_arrays,
         sampling_rate=feature_extractor.sampling_rate,
         max_length=int(feature_extractor.sampling_rate * max_duration_s),
         truncation=True,
-        padding=True,
+        padding=False,
         return_tensors="np"
     )
-
-    return {
-        "input_values": inputs.input_values,
-        "labels": examples["label"]
-    }
+    return {"input_values": inputs.input_values, "labels": examples["label"]}
 
 def compute_metrics(eval_pred):
-    """
-    Computes comprehensive metrics for evaluation.
-    """
+    """Computes accuracy and F1 score for evaluation."""
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=-1)
-
     acc = accuracy_score(labels, predictions)
     f1 = f1_score(labels, predictions, average="weighted")
-    f1_macro = f1_score(labels, predictions, average="macro")
+    return {"accuracy": acc, "f1": f1}
 
-    return {
-        "accuracy": acc,
-        "f1_weighted": f1,
-        "f1_macro": f1_macro
-    }
-
-# Custom Data Collator
-class DataCollatorForWav2Vec2Classification:
-    """
-    Data collator that handles padding.
-    """
-    def __init__(self, feature_extractor, padding=True, max_length=None):
-        self.feature_extractor = feature_extractor
-        self.padding = padding
-        self.max_length = max_length
-
-    def __call__(self, features):
-        # Separate input_values and labels
-        input_features = [{"input_values": feature["input_values"]} for feature in features]
-        labels = [feature["labels"] for feature in features]
-
-        # Pad input_values
-        batch = self.feature_extractor.pad(
-            input_features,
-            padding=self.padding,
-            max_length=self.max_length,
-            return_tensors="pt"
-        )
-
-        # Add labels to batch
-        batch["labels"] = torch.tensor(labels, dtype=torch.long)
-
-        return batch
-
-# Custom Trainer with class weighting and learning rate scheduling
 class CustomTrainer(Trainer):
-    def __init__(self, class_weights=None, *args, **kwargs):
+    """Custom Trainer to implement a weighted loss function."""
+    def __init__(self, *args, class_weights=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.class_weights = class_weights
-        self.lr_scheduler = None
+        self.class_weights = class_weights.to(self.args.device) if class_weights is not None else None
 
-    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        labels = inputs.get("labels")
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """Overrides the default loss computation."""
+        labels = inputs.pop("labels")
         outputs = model(**inputs)
         logits = outputs.get("logits")
 
-        if self.class_weights is not None:
-            # Create class weights tensor
-            weight_tensor = torch.tensor(
-                [self.class_weights[i] for i in range(len(self.class_weights))],
-                dtype=torch.float,
-                device=logits.device
-            )
-
-            # Compute weighted loss
-            loss_fct = torch.nn.CrossEntropyLoss(weight=weight_tensor)
-            loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
-        else:
-            loss = outputs.loss
+        # Use weighted CrossEntropyLoss
+        loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights)
+        loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
 
         return (loss, outputs) if return_outputs else loss
 
     def create_optimizer(self):
-        # Create different learning rates for different parts of the model
-        no_decay = ["bias", "LayerNorm.weight"]
+        """
+        Creates an optimizer with layer-wise learning rates (discriminative fine-tuning).
+        The classification head gets a higher learning rate than the pre-trained base model.
+        """
+        model = self.model
+        lr_head = self.args.learning_rate * 10  # Higher LR for the new layers
+        lr_base = self.args.learning_rate       # Lower LR for the pre-trained layers
+
         optimizer_grouped_parameters = [
             {
-                "params": [p for n, p in self.model.named_parameters()
-                          if "wav2vec2" in n and not any(nd in n for nd in no_decay)],
-                "lr": self.args.learning_rate / 10,
-                "weight_decay": self.args.weight_decay,
+                "params": [p for n, p in model.named_parameters() if "wav2vec2" in n],
+                "lr": lr_base,
             },
             {
-                "params": [p for n, p in self.model.named_parameters()
-                          if "wav2vec2" in n and any(nd in n for nd in no_decay)],
-                "lr": self.args.learning_rate / 10,
-                "weight_decay": 0.0,
-            },
-            {
-                "params": [p for n, p in self.model.named_parameters()
-                          if "classifier" in n or "projector" in n],
-                "lr": self.args.learning_rate,
-                "weight_decay": self.args.weight_decay,
+                "params": [p for n, p in model.named_parameters() if "wav2vec2" not in n],
+                "lr": lr_head,
             },
         ]
 
-        optimizer = torch.optim.AdamW(
+        self.optimizer = AdamW(
             optimizer_grouped_parameters,
-            lr=self.args.learning_rate,
-            eps=self.args.adam_epsilon,
+            lr=self.args.learning_rate, # This is a default, will be overridden by group LRs
+            eps=self.args.adam_epsilon
         )
-        self.optimizer = optimizer
-        return optimizer
+        logging.info(f"Created AdamW optimizer with differential learning rates: Base LR={lr_base}, Head LR={lr_head}")
+        return self.optimizer
 
-# Learning rate scheduler callback
 class LearningRateCallback(TrainerCallback):
     def on_epoch_end(self, args, state, control, **kwargs):
-        if state.epoch > 0:
-            current_lr = state.log_history[-1].get('learning_rate', 0)
-            logging.info(f"End of epoch {state.epoch}: Learning rate = {current_lr:.2e}")
+        # Log learning rate at the end of each epoch
+        if state.is_world_process_zero:
+            optimizer = kwargs['optimizer']
+            for i, param_group in enumerate(optimizer.param_groups):
+                wandb.log({f"learning_rate_group_{i}": param_group['lr'], "epoch": state.epoch})
 
 # --- Main Orchestration ---
-def run_hf_training(metadata_csv: str):
+def run_hf_training(metadata_csv: str, augment_data: bool):
     """
-    Orchestrates the entire fine-tuning pipeline with improvements.
+    Orchestrates the entire fine-tuning pipeline.
     """
-    logging.info(f"--- Starting Improved Hugging Face Model Fine-Tuning ---")
+    logging.info(f"--- Starting Optimized HF Model Fine-Tuning for {MODEL_CHECKPOINT} ---")
+    wandb.init(project="twi-speech-e-commerce", name=f"optimized-run-{pd.Timestamp.now():%Y%m%d-%H%M}")
 
-    # 1. Load and prepare dataset with filtering and augmentation
-    dataset, label2id, id2label, class_weights = load_and_prepare_dataset(
-        metadata_csv,
-        min_samples_per_class=3,
-        target_samples_per_class=15  # Increased for small dataset
-    )
-
-    logging.info(f"Final dataset - Training: {len(dataset['train'])}, Validation: {len(dataset['eval'])}")
-    logging.info(f"Number of classes: {len(label2id)}")
+    # 1. Load and prepare dataset, getting class weights
+    dataset, label2id, id2label, class_weights = load_and_prepare_dataset(metadata_csv, augment=augment_data)
+    logging.info(f"Training set size: {len(dataset['train'])}, Validation set size: {len(dataset['eval'])}")
+    logging.info(f"Class weights computed for {len(class_weights)} classes.")
 
     # 2. Load Feature Extractor
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_CHECKPOINT)
-    logging.info("Loaded Wav2Vec2FeatureExtractor.")
 
     # 3. Preprocess the dataset
+    # After augmentation, the 'local_path' column now contains the dictionary with the audio array
     encoded_dataset = dataset.map(
         lambda x: preprocess_function(x, feature_extractor),
-        remove_columns=[col for col in dataset["train"].column_names if col not in ["input_values", "labels"]],
         batched=True,
-        batch_size=16
+        batch_size=8,
+        num_proc=os.cpu_count() // 2 or 1,
+        remove_columns=dataset["train"].column_names # Keep only input_values and labels
     )
     logging.info("Dataset preprocessed for the model.")
 
-    # 4. Load the Model with optimized configuration
+    # 4. Load the Model with a new head
     config = AutoConfig.from_pretrained(
         MODEL_CHECKPOINT,
         num_labels=len(label2id),
         label2id=label2id,
         id2label=id2label,
         finetuning_task="wav2vec2_clf",
-        layerdrop=0.05,  # Reduced dropout
-        mask_time_prob=0.03,  # Reduced masking
-        mask_feature_prob=0.03,
-        hidden_dropout=0.05,  # Reduced dropout
-        attention_dropout=0.05,  # Reduced dropout
-        classifier_dropout=0.1,
     )
+    model = Wav2Vec2ForSequenceClassification.from_pretrained(MODEL_CHECKPOINT, config=config, ignore_mismatched_sizes=True)
+    model.freeze_feature_encoder()
+    logging.info("Loaded and configured Wav2Vec2ForSequenceClassification model.")
 
-    model = Wav2Vec2ForSequenceClassification.from_pretrained(
-        MODEL_CHECKPOINT,
-        config=config,
-        ignore_mismatched_sizes=True
-    )
-
-    # Move model to device
-    model.to(device)
-    logging.info(f"Model moved to device: {device}")
-
-    # Freeze only the first 10 layers of the feature encoder
-    for i in range(10):
-        model.wav2vec2.encoder.layers[i].requires_grad_(False)
-    logging.info("First 10 layers of feature encoder frozen")
-
-    # Initialize classification layers properly
-    def init_classification_layers(model):
-        if hasattr(model, 'classifier'):
-            torch.nn.init.kaiming_normal_(model.classifier.weight, nonlinearity='relu')
-            torch.nn.init.constant_(model.classifier.bias, 0.0)
-
-        if hasattr(model, 'projector') and model.projector is not None:
-            torch.nn.init.kaiming_normal_(model.projector.weight, nonlinearity='relu')
-            torch.nn.init.constant_(model.projector.bias, 0.0)
-
-    init_classification_layers(model)
-
-    # 5. Setup data collator
-    data_collator = DataCollatorForWav2Vec2Classification(
-        feature_extractor=feature_extractor,
-        padding=True,
-        max_length=80000,  # 5 seconds at 16kHz
-    )
-
-    # 6. Define optimized training arguments
+    # 5. Define Training Arguments
     training_args = TrainingArguments(
         output_dir=MODEL_OUTPUT_DIR,
-        per_device_train_batch_size=4,  # Smaller batch size for small dataset
-        per_device_eval_batch_size=4,
-        gradient_accumulation_steps=8,  # More accumulation steps
-        eval_strategy="epoch",  # Evaluate every epoch for small dataset
+        per_device_train_batch_size=8,
+        per_device_eval_batch_size=8,
+        gradient_accumulation_steps=2, # Effective batch size = 16
+        evaluation_strategy="epoch",
         save_strategy="epoch",
-        logging_steps=10,
-        num_train_epochs=30,  # More epochs for small dataset
+        logging_steps=50,
+        num_train_epochs=15, # More epochs because of augmentation
         fp16=torch.cuda.is_available(),
-        learning_rate=3e-4,  # Higher learning rate
-        weight_decay=0.001,  # Lower weight decay
-        warmup_ratio=0.1,  # Warmup ratio instead of steps
-        max_grad_norm=1.0,
-        dataloader_pin_memory=True,
-        remove_unused_columns=False,
-        save_total_limit=2,
+        learning_rate=5e-5, # A good starting point for AdamW
+        weight_decay=0.01,
+        warmup_ratio=0.1,
+        lr_scheduler_type='cosine', # Cosine decay scheduler
+        save_total_limit=3,
         load_best_model_at_end=True,
-        metric_for_best_model="f1_weighted",
+        metric_for_best_model="f1",
         greater_is_better=True,
         report_to="wandb",
-        adam_epsilon=1e-8,
-        optim="adamw_torch",
-        lr_scheduler_type="cosine",  # Simpler scheduler
-        dataloader_num_workers=2,
-        seed=42,
-        run_name="small-dataset-wav2vec2",
-        skip_memory_metrics=True,
-        dataloader_prefetch_factor=2,
-        gradient_checkpointing=True,  # Enable to save memory
-        # eval_strategy="epoch",
-        logging_strategy="steps",
     )
 
-    # 7. Initialize the custom trainer
+    # 6. Initialize the Custom Trainer
     trainer = CustomTrainer(
         model=model,
         args=training_args,
         train_dataset=encoded_dataset["train"],
         eval_dataset=encoded_dataset["eval"],
-        data_collator=data_collator,
+        data_collator=None, # Trainer will use default data collator which is fine here
         compute_metrics=compute_metrics,
         class_weights=class_weights,
-        callbacks=[
-            LearningRateCallback(),
-            EarlyStoppingCallback(early_stopping_patience=10, early_stopping_threshold=0.001)  # More patience
-        ],
+        callbacks=[LearningRateCallback()]
     )
 
-    logging.info("Optimized trainer initialized.")
+    # 7. Start Training
+    logging.info("--- Starting Training Loop ---")
+    trainer.train()
+    logging.info("--- Training Complete ---")
 
-    # 8. Test small batch
-    logging.info("--- Testing small batch ---")
-    try:
-        small_batch = [encoded_dataset["train"][i] for i in range(2)]
-        collated_batch = data_collator(small_batch)
-
-        # Move to device manually for test
-        collated_batch = {k: v.to(device) for k, v in collated_batch.items()}
-
-        # Test forward pass
-        model.eval()
-        with torch.no_grad():
-            outputs = model(**collated_batch)
-            logging.info(f"Test batch - Loss: {outputs.loss:.4f}, Logits shape: {outputs.logits.shape}")
-    except Exception as e:
-        logging.error(f"Error in small batch test: {e}")
-        raise
-
-    # 9. Start Training
-    logging.info("--- Starting Optimized Training Loop ---")
-    try:
-        train_result = trainer.train()
-        metrics = train_result.metrics
-        trainer.save_metrics("train", metrics)
-        logging.info("--- Training Complete ---")
-    except Exception as e:
-        logging.error(f"Training failed: {e}")
-        raise
-
-    # 10. Final evaluation with detailed metrics
-    logging.info("--- Final Evaluation ---")
+    # 8. Final Evaluation and Model Saving
+    logging.info("--- Starting Final Evaluation ---")
     eval_results = trainer.evaluate()
-    logging.info(f"Final Results: {eval_results}")
+    logging.info(f"Final Evaluation Results: {eval_results}")
+    wandb.log({"final_eval_results": eval_results})
 
-    # Generate classification report
-    predictions = trainer.predict(encoded_dataset["eval"])
-    y_pred = np.argmax(predictions.predictions, axis=1)
-    y_true = predictions.label_ids
-
-    # Create classification report
-    target_names = [id2label[i] for i in range(len(id2label))]
-    report = classification_report(y_true, y_pred, target_names=target_names, output_dict=True)
-
-    # Save detailed results
-    results_path = os.path.join(MODEL_OUTPUT_DIR, 'evaluation_results.json')
-    with open(results_path, 'w') as f:
-        json.dump({
-            'final_metrics': eval_results,
-            'classification_report': report,
-            'class_weights': class_weights
-        }, f, indent=4)
-
-    # 11. Save model and artifacts
-    model.save_pretrained(MODEL_OUTPUT_DIR)
+    trainer.save_model(MODEL_OUTPUT_DIR)
     feature_extractor.save_pretrained(MODEL_OUTPUT_DIR)
-    logging.info(f"Model and artifacts saved to: {MODEL_OUTPUT_DIR}")
-    logging.info("Optimized model training completed successfully!")
+    logging.info(f"Fine-tuned model and artifacts saved to: {MODEL_OUTPUT_DIR}")
+    wandb.finish()
+
 
 if __name__ == '__main__':
     import argparse
-    import torch.multiprocessing as mp
-
-    mp.set_start_method('spawn', force=True)
-    parser = argparse.ArgumentParser(description="Fine-tune Wav2Vec2 with improvements.")
+    parser = argparse.ArgumentParser(description="Fine-tune a Wav2Vec2 model with optimizations for small datasets.")
     parser.add_argument(
         '--metadata_csv',
         type=str,
         required=True,
         help="Path to the metadata CSV file."
     )
+    parser.add_argument(
+        '--augment',
+        action='store_true',
+        help="Enable on-the-fly audio augmentation for the training set."
+    )
     args = parser.parse_args()
 
-    run_hf_training(metadata_csv=args.metadata_csv)
+    # It's good practice to log in to wandb at the start
+    if not wandb.api.api_key:
+        api_key = os.environ.get("WANDB_API_KEY")
+        if api_key:
+            wandb.login(key=api_key)
+        else:
+            logging.warning("WANDB_API_KEY not found. Wandb logging will be disabled.")
+            os.environ["WANDB_DISABLED"] = "true"
+
+    run_hf_training(metadata_csv=args.metadata_csv, augment_data=args.augment)
