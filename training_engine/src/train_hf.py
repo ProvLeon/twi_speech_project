@@ -345,10 +345,32 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         finetuning_task="wav2vec2_clf",
     )
     model = Wav2Vec2ForSequenceClassification.from_pretrained(MODEL_CHECKPOINT, config=config, ignore_mismatched_sizes=True)
+    model = model.to(torch.float32) # Ensure model is in float32
+    logging.info("Model loaded and cast to float32.")
 
     # Freeze the feature encoder
     model.freeze_feature_encoder()
     logging.info("Froze feature encoder.")
+
+    # --- Debugging: Perform a dummy forward pass in eval mode for stability ---
+    logging.info("Performing warm-up forward pass in evaluation mode...")
+    model.eval()
+    try:
+        # Create a dummy input batch (e.g., 2 samples of 1 second silence)
+        dummy_input_values = torch.zeros(2, 16000, dtype=torch.float32)
+        dummy_labels = torch.zeros(2, dtype=torch.long)
+        dummy_batch = {
+            "input_values": dummy_input_values,
+            "labels": dummy_labels
+        }
+        with torch.no_grad():
+            _ = model(**dummy_batch) # Perform a forward pass
+        logging.info("Warm-up forward pass completed successfully.")
+    except Exception as e:
+        logging.error(f"Warm-up forward pass failed: {e}")
+        raise
+    model.train() # Set model back to train mode
+    # --- End Debugging Block ---
 
     # 5. Setup custom data collator
     data_collator = DataCollatorForWav2Vec2Classification(
@@ -368,7 +390,7 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         num_train_epochs=15, # More epochs because of augmentation
         fp16=False,
         label_smoothing_factor=0.1, # Use label smoothing instead of class weights
-        gradient_checkpointing=False,
+        gradient_checkpointing=True, # Re-enable for memory saving and potential stability
         max_grad_norm=1.0,
         learning_rate=5e-5, # A reasonable LR for the classification head
         weight_decay=0.01,
