@@ -175,14 +175,33 @@ def load_and_prepare_dataset(metadata_csv_path: str, augment=False):
     return dataset_dict, label2id, id2label, class_weights
 
 def preprocess_function(examples, feature_extractor, max_duration_s=5.0):
-    """Preprocesses audio data for the Wav2Vec2 model."""
+    """Preprocesses audio data for the Wav2Vec2 model with normalization."""
     audio_arrays = [x["array"] for x in examples["local_path"]]
+
+    # Normalize audio to [-1, 1] range to prevent numerical instability
+    processed_audio = []
+    for audio in audio_arrays:
+        # Check for non-finite values and replace them
+        if not np.isfinite(audio).all():
+            audio = np.nan_to_num(audio) # Replaces NaN with 0 and Inf with large numbers
+
+        # Remove DC offset
+        audio = audio - np.mean(audio)
+
+        # Normalize
+        peak = np.abs(audio).max()
+        if peak > 0:
+            audio = audio / peak
+
+        processed_audio.append(audio)
+
+
     inputs = feature_extractor(
-        audio_arrays,
+        processed_audio,
         sampling_rate=feature_extractor.sampling_rate,
         max_length=int(feature_extractor.sampling_rate * max_duration_s),
         truncation=True,
-        padding=False,
+        padding=False, # Collator will handle padding
         return_tensors="np"
     )
     return {"input_values": inputs.input_values, "labels": examples["label"]}
@@ -315,7 +334,7 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         finetuning_task="wav2vec2_clf",
     )
     model = Wav2Vec2ForSequenceClassification.from_pretrained(MODEL_CHECKPOINT, config=config, ignore_mismatched_sizes=True)
-    model.freeze_feature_encoder()
+    # Note: We do not freeze the feature encoder. Layer-wise learning rates handle this more gracefully and avoid fp16/NaN issues.
     logging.info("Loaded and configured Wav2Vec2ForSequenceClassification model.")
 
     # 5. Setup custom data collator
@@ -335,6 +354,7 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         logging_steps=50,
         num_train_epochs=15, # More epochs because of augmentation
         fp16=torch.cuda.is_available(),
+        max_grad_norm=1.0, # Enable gradient clipping to prevent exploding gradients
         learning_rate=5e-5, # A good starting point for AdamW
         weight_decay=0.01,
         warmup_ratio=0.1,
