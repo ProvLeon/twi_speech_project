@@ -4,7 +4,8 @@ import json
 import torch
 import pandas as pd
 import numpy as np
-from datasets import Audio, Dataset, DatasetDict, ClassLabel
+from datasets import load_dataset, Audio, Dataset, DatasetDict, ClassLabel, Features, Value
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score
 from torch.optim import AdamW
 from transformers import (
@@ -14,6 +15,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
     TrainerCallback,
+    DataCollatorWithPadding,
 )
 import librosa
 import wandb
@@ -207,6 +209,9 @@ def compute_metrics(eval_pred):
     return {"accuracy": acc, "f1": f1}
 
 
+
+
+
 # Custom Data Collator for padding audio sequences
 class DataCollatorForWav2Vec2Classification:
     """
@@ -236,6 +241,66 @@ class DataCollatorForWav2Vec2Classification:
         return batch
 
 
+# Custom Data Collator for padding audio sequences
+class DataCollatorForWav2Vec2Classification:
+    """
+    Data collator that dynamically pads the inputs received, as well as the labels.
+    """
+    feature_extractor: Wav2Vec2FeatureExtractor
+    padding: bool
+    max_length: int
+
+    def __init__(self, feature_extractor: Wav2Vec2FeatureExtractor, padding: bool = True, max_length: int = None):
+        self.feature_extractor = feature_extractor
+        self.padding = padding
+        self.max_length = max_length
+
+    def __call__(self, features):
+        input_features = [{"input_values": feature["input_values"]} for feature in features]
+        label_features = [feature["labels"] for feature in features]
+
+        batch = self.feature_extractor.pad(
+            input_features,
+            padding=self.padding,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        batch["labels"] = torch.tensor(label_features)
+
+        return batch
+
+
+class CustomTrainer(Trainer):
+    """
+    Custom Trainer to implement layer-wise learning rates (discriminative fine-tuning).
+    """
+    def create_optimizer(self):
+        """
+        The classification head gets a higher learning rate than the pre-trained base model.
+        """
+        model = self.model
+        lr_head = self.args.learning_rate
+        lr_base = self.args.learning_rate / 20.0  # Use a much smaller LR for the base model
+
+        optimizer_grouped_parameters = [
+            {
+                "params": [p for n, p in model.named_parameters() if "wav2vec2" in n and p.requires_grad],
+                "lr": lr_base,
+            },
+            {
+                "params": [p for n, p in model.named_parameters() if "wav2vec2" not in n],
+                "lr": lr_head,
+            },
+        ]
+
+        self.optimizer = AdamW(
+            optimizer_grouped_parameters,
+            lr=self.args.learning_rate, # This is a default, will be overridden by group LRs
+            eps=self.args.adam_epsilon
+        )
+        logging.info(f"Created AdamW optimizer with differential learning rates: Base LR={lr_base}, Head LR={lr_head}")
+        return self.optimizer
+
 class LearningRateCallback(TrainerCallback):
     def on_epoch_end(self, args, state, control, **kwargs):
         # Log learning rate at the end of each epoch
@@ -249,15 +314,8 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
     """
     Orchestrates the entire fine-tuning pipeline.
     """
-    logging.info(f"--- Starting Stable Hugging Face Model Fine-Tuning ---")
-
-    if augment_data:
-        logging.warning("="*80)
-        logging.warning("WARNING: Data augmentation is enabled. If you encounter NaN errors,")
-        logging.warning("try running without the --augment flag to establish a stable baseline.")
-        logging.warning("="*80)
-
-    wandb.init(project="twi-speech-e-commerce", name=f"stable-run-{pd.Timestamp.now():%Y%m%d-%H%M}")
+    logging.info(f"--- Starting Optimized HF Model Fine-Tuning for {MODEL_CHECKPOINT} ---")
+    wandb.init(project="twi-speech-e-commerce", name=f"optimized-run-{pd.Timestamp.now():%Y%m%d-%H%M}")
 
     # 1. Load and prepare dataset
     dataset, label2id, id2label = load_and_prepare_dataset(metadata_csv, augment=augment_data)
@@ -268,6 +326,7 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_CHECKPOINT)
 
     # 3. Preprocess the dataset
+    # After augmentation, the 'local_path' column now contains the dictionary with the audio array
     encoded_dataset = dataset.map(
         lambda x: preprocess_function(x, feature_extractor),
         batched=True,
@@ -287,9 +346,9 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
     )
     model = Wav2Vec2ForSequenceClassification.from_pretrained(MODEL_CHECKPOINT, config=config, ignore_mismatched_sizes=True)
 
-    # Freeze the feature encoder as recommended for fine-tuning. This enhances stability.
+    # Freeze the feature encoder
     model.freeze_feature_encoder()
-    logging.info("Loaded and configured Wav2Vec2ForSequenceClassification model with frozen feature encoder.")
+    logging.info("Froze feature encoder.")
 
     # 5. Setup custom data collator
     data_collator = DataCollatorForWav2Vec2Classification(
@@ -306,14 +365,16 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         eval_strategy="epoch",
         save_strategy="epoch",
         logging_steps=50,
-        num_train_epochs=15,
-        fp16=False, # Keep disabled for stability
-        max_grad_norm=1.0, # Keep gradient clipping
-        learning_rate=2e-5, # A safe, standard learning rate for fine-tuning
+        num_train_epochs=15, # More epochs because of augmentation
+        fp16=False,
+        label_smoothing_factor=0.1, # Use label smoothing instead of class weights
+        gradient_checkpointing=False,
+        max_grad_norm=1.0,
+        learning_rate=5e-5, # A reasonable LR for the classification head
         weight_decay=0.01,
         warmup_ratio=0.1,
         lr_scheduler_type='cosine',
-        label_smoothing_factor=0.1, # Use label smoothing for regularization
+        adam_epsilon=1e-6, # Stabilize optimizer
         save_total_limit=3,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
@@ -321,8 +382,8 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         report_to="wandb",
     )
 
-    # 7. Initialize the standard Trainer
-    trainer = Trainer(
+    # 7. Initialize the Custom Trainer
+    trainer = CustomTrainer(
         model=model,
         args=training_args,
         train_dataset=encoded_dataset["train"],
@@ -343,7 +404,7 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
     logging.info(f"Final Evaluation Results: {eval_results}")
     wandb.log({"final_eval_results": eval_results})
 
-    trainer.save__model(MODEL_OUTPUT_DIR)
+    trainer.save_model(MODEL_OUTPUT_DIR)
     feature_extractor.save_pretrained(MODEL_OUTPUT_DIR)
     logging.info(f"Fine-tuned model and artifacts saved to: {MODEL_OUTPUT_DIR}")
     wandb.finish()
