@@ -15,7 +15,8 @@ from transformers import (
     Wav2Vec2ForSequenceClassification,
     Trainer,
     TrainingArguments,
-    TrainerCallback
+    TrainerCallback,
+    DataCollatorWithPadding,
 )
 import librosa
 import wandb
@@ -194,6 +195,36 @@ def compute_metrics(eval_pred):
     f1 = f1_score(labels, predictions, average="weighted")
     return {"accuracy": acc, "f1": f1}
 
+
+# Custom Data Collator for padding audio sequences
+class DataCollatorForWav2Vec2Classification:
+    """
+    Data collator that dynamically pads the inputs received, as well as the labels.
+    """
+    feature_extractor: Wav2Vec2FeatureExtractor
+    padding: bool
+    max_length: int
+
+    def __init__(self, feature_extractor: Wav2Vec2FeatureExtractor, padding: bool = True, max_length: int = None):
+        self.feature_extractor = feature_extractor
+        self.padding = padding
+        self.max_length = max_length
+
+    def __call__(self, features):
+        input_features = [{"input_values": feature["input_values"]} for feature in features]
+        label_features = [feature["labels"] for feature in features]
+
+        batch = self.feature_extractor.pad(
+            input_features,
+            padding=self.padding,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        batch["labels"] = torch.tensor(label_features)
+
+        return batch
+
+
 class CustomTrainer(Trainer):
     """Custom Trainer to implement a weighted loss function."""
     def __init__(self, *args, class_weights=None, **kwargs):
@@ -287,7 +318,13 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
     model.freeze_feature_encoder()
     logging.info("Loaded and configured Wav2Vec2ForSequenceClassification model.")
 
-    # 5. Define Training Arguments
+    # 5. Setup custom data collator
+    data_collator = DataCollatorForWav2Vec2Classification(
+        feature_extractor=feature_extractor,
+        padding=True,
+    )
+
+    # 6. Define Training Arguments
     training_args = TrainingArguments(
         output_dir=MODEL_OUTPUT_DIR,
         per_device_train_batch_size=8,
@@ -315,13 +352,13 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         args=training_args,
         train_dataset=encoded_dataset["train"],
         eval_dataset=encoded_dataset["eval"],
-        data_collator=None, # Trainer will use default data collator which is fine here
+        data_collator=data_collator,
         compute_metrics=compute_metrics,
         class_weights=class_weights,
         callbacks=[LearningRateCallback()]
     )
 
-    # 7. Start Training
+    # 8. Start Training
     logging.info("--- Starting Training Loop ---")
     trainer.train()
     logging.info("--- Training Complete ---")
