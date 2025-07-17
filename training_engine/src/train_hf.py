@@ -68,40 +68,32 @@ def filter_classes_by_frequency(class_distribution, min_samples=3):
 def augment_audio_data(batch, class_distribution, target_classes, sampling_rate=16000):
     """
     Applies augmentation to a batch of audio data, focusing on underrepresented classes.
-    This function is designed to be used with `dataset.map()`.
+    This function is designed to be used with `dataset.map()` and assumes audio is pre-loaded.
     """
-    augmented_audios = []
-    audio_paths = batch["local_path"]
+    audio_dicts = batch["local_path"]
     labels = batch["label_str"]  # Using string labels to check against target classes
 
-    for audio_path, label in zip(audio_paths, labels):
-        # Load audio file
-        try:
-            audio, sr = librosa.load(audio_path, sr=sampling_rate, mono=True)
-        except Exception as e:
-            logging.warning(f"Could not load audio file {audio_path}: {e}. Skipping.")
-            # Append a placeholder or handle as appropriate. Here, we append zeros.
-            augmented_audios.append(np.zeros(sampling_rate * 1)) # 1 second of silence
-            continue
-
+    for i in range(len(audio_dicts)):
         # Augment only if the class is in our target list of underrepresented classes
-        if label in target_classes:
+        if labels[i] in target_classes:
+            audio = audio_dicts[i]['array'].copy() # Work on a copy
+            sr = audio_dicts[i]['sampling_rate']
+
             choice = np.random.randint(0, 4)
             if choice == 0:
                 audio = apply_noise(audio, noise_factor=np.random.uniform(0.003, 0.007))
             elif choice == 1:
-                audio = apply_pitch_shift(audio, sampling_rate, n_steps=np.random.uniform(-2, 2))
+                audio = apply_pitch_shift(audio, sr, n_steps=np.random.uniform(-2, 2))
             elif choice == 2:
                 # Avoid extreme stretching which can corrupt audio
                 audio = apply_time_stretch(audio, rate=np.random.uniform(0.9, 1.1))
             elif choice == 3:
                 audio = apply_volume_change(audio, volume_factor=np.random.uniform(0.8, 1.2))
 
-        augmented_audios.append(audio)
+            # Update the array in the dictionary
+            audio_dicts[i]['array'] = audio
 
-    # The key here should match the one expected by preprocess_function
-    # We will rename 'local_path' to 'audio' and place the augmented array there.
-    batch["audio"] = [{"path": path, "array": arr, "sampling_rate": sampling_rate} for path, arr in zip(audio_paths, augmented_audios)]
+    # The whole batch dict is returned by map, with the 'local_path' column modified.
     return batch
 
 def load_and_prepare_dataset(metadata_csv_path: str, augment=False):
@@ -135,31 +127,31 @@ def load_and_prepare_dataset(metadata_csv_path: str, augment=False):
     dataset = Dataset.from_pandas(df)
     dataset = dataset.cast_column("label", ClassLabel(num_classes=len(unique_labels), names=unique_labels))
 
+    # IMPORTANT: Cast the audio column *before* splitting and augmentation.
+    # This ensures that all splits have a consistent data structure.
+    dataset = dataset.cast_column("local_path", Audio(sampling_rate=16000))
+
     # Split first, then augment only the training set
     train_test_split = dataset.train_test_split(test_size=0.2, stratify_by_column="label", seed=42)
 
     if augment:
-        logging.info("Applying augmentation to the training set...")
-        # We pass string labels to the augmentation function to make logic simpler
-        train_df = train_test_split['train'].to_pandas()
-        train_df['label_str'] = train_df['label'].map(id2label)
+        logging.info("Applying on-the-fly augmentation to the training set...")
+        # We need the string label for our augmentation logic, so add it temporarily
+        train_set = train_test_split['train'].map(
+            lambda example: {'label_str': id2label[example['label']]},
+            num_proc=os.cpu_count() // 2 or 1
+        )
 
-        # Create a temporary dataset to map the augmentation function
-        temp_train_dataset = Dataset.from_pandas(train_df)
-
-        # This is memory intensive as it loads all audio to augment
-        augmented_train_dataset = temp_train_dataset.map(
+        augmented_train_dataset = train_set.map(
             augment_audio_data,
             fn_kwargs={"class_distribution": class_distribution, "target_classes": target_aug_classes},
             batched=True,
             batch_size=10, # Process in small batches
-            num_proc=os.cpu_count() // 2 or 1,
-            remove_columns=['local_path'] # Remove original path, we use the 'audio' dict now
+            num_proc=os.cpu_count() // 2 or 1
         )
-        logging.info("Augmentation complete.")
-
-        # Rename the 'audio' column to 'local_path' to match the original structure for subsequent steps
-        augmented_train_dataset = augmented_train_dataset.rename_column("audio", "local_path")
+        # Remove the temporary string label column
+        augmented_train_dataset = augmented_train_dataset.remove_columns(['label_str'])
+        logging.info("Augmentation mapping complete.")
 
         dataset_dict = DatasetDict({
             'train': augmented_train_dataset,
