@@ -215,6 +215,14 @@ def compute_metrics(eval_pred):
     return {"accuracy": acc, "f1": f1}
 
 
+def init_weights(m):
+    """Applies Kaiming He initialization to linear layers."""
+    if isinstance(m, torch.nn.Linear):
+        torch.nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+        if m.bias is not None:
+            torch.nn.init.constant_(m.bias, 0)
+
+
 # Custom Data Collator for padding audio sequences
 class DataCollatorForWav2Vec2Classification:
     """
@@ -340,9 +348,17 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
     )
     model = Wav2Vec2ForSequenceClassification.from_pretrained(MODEL_CHECKPOINT, config=config, ignore_mismatched_sizes=True)
 
-    # Freeze the feature encoder as recommended for fine-tuning. This enhances stability.
+    # Apply Kaiming He initialization to the randomly initialized classification layers
+    model.projector.apply(init_weights)
+    model.classifier.apply(init_weights)
+    logging.info("Applied Kaiming He initialization to the classification head.")
+
+    # Freeze the feature encoder (CNNs) and all but the last 2 transformer layers
     model.freeze_feature_encoder()
-    logging.info("Loaded and configured Wav2Vec2ForSequenceClassification model with frozen feature encoder.")
+    for layer in model.wav2vec2.encoder.layers[:-2]:
+        for param in layer.parameters():
+            param.requires_grad = False
+    logging.info("Froze feature encoder and all but the last 2 transformer layers.")
 
     # 5. Setup custom data collator
     data_collator = DataCollatorForWav2Vec2Classification(
