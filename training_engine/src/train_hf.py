@@ -231,7 +231,7 @@ class CustomTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.class_weights = class_weights.to(self.args.device) if class_weights is not None else None
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         """Overrides the default loss computation."""
         labels = inputs.pop("labels")
         outputs = model(**inputs)
