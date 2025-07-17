@@ -188,10 +188,10 @@ def preprocess_function(examples, feature_extractor, max_duration_s=5.0):
         # Remove DC offset
         audio = audio - np.mean(audio)
 
-        # Normalize
+        # Normalize with a small epsilon to prevent division by zero
         peak = np.abs(audio).max()
         if peak > 0:
-            audio = audio / peak
+            audio = audio / (peak + 1e-9)
 
         processed_audio.append(audio)
 
@@ -255,6 +255,11 @@ class CustomTrainer(Trainer):
         labels = inputs.pop("labels")
         outputs = model(**inputs)
         logits = outputs.get("logits")
+
+        # Add a check for NaN logits to catch instability early
+        if torch.isnan(logits).any():
+            logging.error("NaN detected in model logits. Training cannot continue.")
+            raise RuntimeError("NaN logits detected. Check data and model stability.")
 
         # Use weighted CrossEntropyLoss
         loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights)
@@ -334,8 +339,10 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         finetuning_task="wav2vec2_clf",
     )
     model = Wav2Vec2ForSequenceClassification.from_pretrained(MODEL_CHECKPOINT, config=config, ignore_mismatched_sizes=True)
-    # Note: We do not freeze the feature encoder. Layer-wise learning rates handle this more gracefully and avoid fp16/NaN issues.
-    logging.info("Loaded and configured Wav2Vec2ForSequenceClassification model.")
+
+    # Freeze the feature encoder as recommended for fine-tuning. This enhances stability.
+    model.freeze_feature_encoder()
+    logging.info("Loaded and configured Wav2Vec2ForSequenceClassification model with frozen feature encoder.")
 
     # 5. Setup custom data collator
     data_collator = DataCollatorForWav2Vec2Classification(
