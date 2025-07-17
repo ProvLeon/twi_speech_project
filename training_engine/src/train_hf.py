@@ -275,33 +275,33 @@ class CustomTrainer(Trainer):
 
         return (loss, outputs) if return_outputs else loss
 
-    def create_optimizer(self):
-        """
-        Creates an optimizer with layer-wise learning rates (discriminative fine-tuning).
-        The classification head gets a higher learning rate than the pre-trained base model.
-        """
-        model = self.model
-        lr_head = self.args.learning_rate * 10  # Higher LR for the new layers
-        lr_base = self.args.learning_rate       # Lower LR for the pre-trained layers
-
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in model.named_parameters() if "wav2vec2" in n],
-                "lr": lr_base,
-            },
-            {
-                "params": [p for n, p in model.named_parameters() if "wav2vec2" not in n],
-                "lr": lr_head,
-            },
-        ]
-
-        self.optimizer = AdamW(
-            optimizer_grouped_parameters,
-            lr=self.args.learning_rate, # This is a default, will be overridden by group LRs
-            eps=self.args.adam_epsilon
-        )
-        logging.info(f"Created AdamW optimizer with differential learning rates: Base LR={lr_base}, Head LR={lr_head}")
-        return self.optimizer
+    # def create_optimizer(self):
+    #     """
+    #     Creates an optimizer with layer-wise learning rates (discriminative fine-tuning).
+    #     The classification head gets a higher learning rate than the pre-trained base model.
+    #     """
+    #     model = self.model
+    #     lr_head = self.args.learning_rate * 10  # Higher LR for the new layers
+    #     lr_base = self.args.learning_rate       # Lower LR for the pre-trained layers
+    #
+    #     optimizer_grouped_parameters = [
+    #         {
+    #             "params": [p for n, p in model.named_parameters() if "wav2vec2" in n],
+    #             "lr": lr_base,
+    #         },
+    #         {
+    #             "params": [p for n, p in model.named_parameters() if "wav2vec2" not in n],
+    #             "lr": lr_head,
+    #         },
+    #     ]
+    #
+    #     self.optimizer = AdamW(
+    #         optimizer_grouped_parameters,
+    #         lr=self.args.learning_rate, # This is a default, will be overridden by group LRs
+    #         eps=self.args.adam_epsilon
+    #     )
+    #     logging.info(f"Created AdamW optimizer with differential learning rates: Base LR={lr_base}, Head LR={lr_head}")
+    #     return self.optimizer
 
 class LearningRateCallback(TrainerCallback):
     def on_epoch_end(self, args, state, control, **kwargs):
@@ -353,12 +353,12 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
     model.classifier.apply(init_weights)
     logging.info("Applied Kaiming He initialization to the classification head.")
 
-    # Freeze the feature encoder (CNNs) and all but the last 2 transformer layers
-    model.freeze_feature_encoder()
-    for layer in model.wav2vec2.encoder.layers[:-2]:
-        for param in layer.parameters():
-            param.requires_grad = False
-    logging.info("Froze feature encoder and all but the last 2 transformer layers.")
+    # # Freeze the feature encoder and all but the last 2 transformer layers
+    # model.freeze_feature_encoder()
+    # for layer in model.wav2vec2.encoder.layers[:-2]:
+    #     for param in layer.parameters():
+    #         param.requires_grad = False
+    # logging.info("Froze feature encoder and all but the last 2 transformer layers.")
 
     # 5. Setup custom data collator
     data_collator = DataCollatorForWav2Vec2Classification(
@@ -379,7 +379,7 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         fp16=False, # Disabled fp16 to enforce numerical stability
         gradient_checkpointing=True, # Saves memory, can also help stability
         max_grad_norm=1.0,
-        learning_rate=3e-5, # Reduced learning rate for stability
+        learning_rate=1e-5, # Using a very safe learning rate for debugging
         weight_decay=0.01,
         warmup_ratio=0.1,
         lr_scheduler_type='cosine',
