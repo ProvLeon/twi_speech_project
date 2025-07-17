@@ -293,7 +293,7 @@ def run_hf_training(metadata_csv: str, augment_data: bool):
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
         gradient_accumulation_steps=2, # Effective batch size = 16
-        evaluation_strategy="epoch",
+        eval_strategy="epoch",
         save_strategy="epoch",
         logging_steps=50,
         num_train_epochs=15, # More epochs because of augmentation
