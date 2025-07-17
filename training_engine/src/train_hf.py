@@ -8,14 +8,13 @@ from datasets import load_dataset, Audio, Dataset, DatasetDict, ClassLabel, Feat
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.utils.class_weight import compute_class_weight
+from torch.optim import AdamW
 from transformers import (
     AutoConfig,
     Wav2Vec2FeatureExtractor,
     Wav2Vec2ForSequenceClassification,
     Trainer,
     TrainingArguments,
-    AdamW,
-    get_linear_schedule_with_warmup,
     TrainerCallback
 )
 import librosa
