@@ -6,3 +6,4 @@ wandb
 data.zip
 models/e_commerce_model_hf/*
 models/e_commerce_model/*
+validation_results/

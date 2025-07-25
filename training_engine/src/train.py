@@ -32,19 +32,19 @@ MODEL_SAVE_PATH = os.path.join(MODEL_OUTPUT_DIR, 'best_model.pth')
 LABEL_MAP_PATH = os.path.join(MODEL_OUTPUT_DIR, 'label_map.json')
 CHECKPOINT_PATH = os.path.join(MODEL_OUTPUT_DIR, 'checkpoint.pth')
 
-# Training settings
-LEARNING_RATE = 0.001
-BATCH_SIZE = 16
-EPOCHS = 30
-TEST_SPLIT_SIZE = 0.2
-EARLY_STOPPING_PATIENCE = 5  # Number of epochs to wait for improvement before stopping
+# Training settings - Optimized for small datasets
+LEARNING_RATE = 0.0005  # Lower learning rate for better stability
+BATCH_SIZE = 8  # Smaller batch size for small datasets
+EPOCHS = 50  # More epochs for small datasets
+TEST_SPLIT_SIZE = 0.15  # Keep more data for training
+EARLY_STOPPING_PATIENCE = 10  # More patience for small datasets
 
-# Audio processing settings
+# Audio processing settings - Enhanced for speech commands
 TARGET_SAMPLE_RATE = 16000
 MAX_AUDIO_SECONDS = 5
-N_MELS = 128  # Number of Mel frequency bins
-N_FFT = 1024  # Size of the FFT window
-HOP_LENGTH = 512 # Hop length for the FFT
+N_MELS = 80  # Reduced for speech commands (better than 128 for commands)
+N_FFT = 512  # Smaller FFT for shorter audio segments
+HOP_LENGTH = 256  # Smaller hop length for better temporal resolution
 
 # --- Custom PyTorch Dataset ---
 class AudioCommandDataset(Dataset):
@@ -68,10 +68,12 @@ class AudioCommandDataset(Dataset):
         label_str = self.df.iloc[idx]['prompt_text']
         label_int = self.label_map[label_str]
 
-        # Check file existence and minimum size (1KB)
-        if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1024:
+        # Check file existence and minimum size (512 bytes - more lenient)
+        if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 512:
             logging.error(f"Audio file missing or too small: {audio_path}")
-            return torch.zeros(1, N_MELS, self.max_samples // HOP_LENGTH + 1), 0
+            # Return appropriate zero tensor with correct dimensions
+            expected_time_steps = (self.max_samples // HOP_LENGTH) + 1
+            return torch.zeros(1, N_MELS, expected_time_steps), 0
 
         try:
             if audio_path.endswith('.m4a'):
@@ -92,11 +94,17 @@ class AudioCommandDataset(Dataset):
             logging.error(f"Error loading audio file {audio_path}: {e}")
             return torch.zeros(1, N_MELS, self.max_samples // HOP_LENGTH + 1), 0
 
-        # Apply augmentations before resampling and padding
+        # Apply augmentations before resampling and padding (with error handling)
         if self.augmentations:
-            waveform_np = waveform.numpy()
-            augmented_samples = self.augmentations(samples=waveform_np, sample_rate=self.sample_rate)
-            waveform = torch.from_numpy(augmented_samples)
+            try:
+                waveform_np = waveform.squeeze().numpy()  # Remove channel dimension for augmentation
+                if waveform_np.ndim > 1:
+                    waveform_np = waveform_np[0]  # Take first channel if multiple
+                augmented_samples = self.augmentations(samples=waveform_np, sample_rate=sr)
+                waveform = torch.from_numpy(augmented_samples).unsqueeze(0)  # Add channel dimension back
+            except Exception as e:
+                logging.warning(f"Augmentation failed for {audio_path}: {e}")
+                # Continue with original waveform
 
         if sr != self.sample_rate:
             resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sample_rate)
@@ -218,11 +226,11 @@ def run_training(metadata_csv=None):
     logging.info(f"Training set size: {len(train_df)}, Validation set size: {len(val_df)}")
 
     # 4. Create Datasets and DataLoaders
-    # Define augmentations
+    # Define conservative augmentations for speech commands
     augmentations = Compose([
-        AddGaussianNoise(min_amplitude=0.001, max_amplitude=0.015, p=0.5),
-        TimeStretch(min_rate=0.8, max_rate=1.25, p=0.5),
-        PitchShift(min_semitones=-4, max_semitones=4, p=0.5)
+        AddGaussianNoise(min_amplitude=0.001, max_amplitude=0.01, p=0.3),  # Less aggressive noise
+        TimeStretch(min_rate=0.9, max_rate=1.1, p=0.3),  # Smaller time stretch
+        PitchShift(min_semitones=-2, max_semitones=2, p=0.2)  # Smaller pitch shift
     ])
 
     mel_spectrogram = torchaudio.transforms.MelSpectrogram(
@@ -234,14 +242,26 @@ def run_training(metadata_csv=None):
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-    # 5. Initialize Model, Loss, and Optimizer
+    # 5. Initialize Model, Loss, and Optimizer with enhanced configuration
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logging.info(f"Using device: {device}")
-    model = ECommerceCommandModel(n_input_mels=N_MELS, n_output_classes=num_classes).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    loss_fn = torch.nn.CrossEntropyLoss()
-    # Add a learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
+    model = ECommerceCommandModel(n_input_mels=N_MELS, n_output_classes=num_classes, dropout=0.3).to(device)
+
+    # Use AdamW optimizer with weight decay for better generalization
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
+
+    # Class-weighted loss to handle imbalanced data
+    class_counts = torch.zeros(num_classes)
+    for _, label in train_dataset:
+        class_counts[label] += 1
+    class_weights = 1.0 / (class_counts + 1e-8)  # Add small epsilon to avoid division by zero
+    class_weights = class_weights / class_weights.sum() * num_classes  # Normalize
+    loss_fn = torch.nn.CrossEntropyLoss(weight=class_weights.to(device))
+
+    # More responsive learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=3, verbose=True, min_lr=1e-6
+    )
 
     # --- Checkpoint Loading ---
     start_epoch = 0
@@ -297,12 +317,12 @@ def run_training(metadata_csv=None):
         # Step the scheduler
         scheduler.step(val_loss)
 
-        # Save the best model based on validation loss
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        # Save the best model based on validation accuracy (better for classification)
+        if val_acc > best_val_accuracy:
             best_val_accuracy = val_acc
+            best_val_loss = val_loss
             torch.save(model.state_dict(), MODEL_SAVE_PATH)
-            logging.info(f"New best model saved with validation loss: {best_val_loss:.4f} and accuracy: {best_val_accuracy:.4f}")
+            logging.info(f"New best model saved with validation accuracy: {best_val_accuracy:.4f} and loss: {best_val_loss:.4f}")
             patience_counter = 0  # Reset patience
         else:
             patience_counter += 1
@@ -336,10 +356,26 @@ def run_training(metadata_csv=None):
             break
 
     logging.info("--- Training Complete ---")
-    # Save the training plots
+    # Save the training plots and final statistics
     save_training_plots(train_loss_history, val_loss_history, "Loss", MODEL_OUTPUT_DIR)
     save_training_plots(train_acc_history, val_acc_history, "Accuracy", MODEL_OUTPUT_DIR)
+
+    # Save training summary
+    summary_path = os.path.join(MODEL_OUTPUT_DIR, "training_summary.txt")
+    with open(summary_path, 'w') as f:
+        f.write(f"Training Summary\n")
+        f.write(f"================\n")
+        f.write(f"Dataset size: {len(df)} total samples\n")
+        f.write(f"Training samples: {len(train_df)}\n")
+        f.write(f"Validation samples: {len(val_df)}\n")
+        f.write(f"Number of classes: {num_classes}\n")
+        f.write(f"Best validation accuracy: {best_val_accuracy:.4f}\n")
+        f.write(f"Best validation loss: {best_val_loss:.4f}\n")
+        f.write(f"Total training epochs: {epoch + 1}\n")
+        f.write(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}\n")
+
     logging.info(f"Best validation accuracy: {best_val_accuracy:.4f}")
+    logging.info(f"Training summary saved to: {summary_path}")
     logging.info(f"Trained model and label map saved in: {MODEL_OUTPUT_DIR}")
 
     # --- Final Step: Copy artifacts to Google Drive if in Colab ---

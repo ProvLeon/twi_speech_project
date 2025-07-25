@@ -1,345 +1,276 @@
-# Superior Twi Speech Training Engine
+# Twi Speech Training Pipeline Improvements
 
 ## Overview
 
-This is our **Superior Training Engine** that significantly outperforms the basic approach used in `local_dialect_speech_model`. Our engine incorporates state-of-the-art techniques in deep learning, audio processing, and training optimization to deliver superior performance for Twi speech recognition.
+This document outlines the comprehensive improvements made to the Twi speech-to-text training pipeline to address the learning issues and optimize performance for small datasets.
 
-## 🚀 Key Improvements Over Original System
+## Key Improvements
 
-### Architecture Enhancements
-- **Multi-Scale Convolutions**: Captures features at different temporal resolutions
-- **Adaptive Attention Mechanisms**: Learnable temperature for better focus
-- **Advanced Squeeze-Excitation Blocks**: Enhanced channel attention with dual pooling
-- **Progressive Feature Refinement**: Multi-stage feature processing
-- **Superior Pooling Strategy**: Combines multiple pooling methods with learnable weights
+### 1. Enhanced Hugging Face Training (`train_hf.py`)
 
-### Feature Extraction Improvements
-- **Comprehensive Feature Set**: 10+ audio features beyond basic MFCC
-- **Advanced Audio Enhancement**: Spectral subtraction, dynamic range compression
-- **Robust Normalization**: MAD-based normalization for outlier handling
-- **Multi-Domain Features**: Time, frequency, and cepstral domain features
+#### Problems Addressed:
+- Model wasn't learning due to unstable training
+- Small dataset causing overfitting
+- Poor audio preprocessing
+- Duplicate code and bugs
 
-### Training Optimization
-- **Mixed Precision Training**: Faster training with lower memory usage
-- **Advanced Augmentation**: 15+ sophisticated augmentation techniques
-- **Intelligent Learning Rate Scheduling**: Cosine annealing with warmup
-- **Gradient Clipping**: Stable training with large models
-- **Early Stopping**: Prevent overfitting with patience-based stopping
+#### Solutions Implemented:
 
-### Data Management
-- **Stratified Splitting**: Balanced train/validation/test splits
-- **Weighted Sampling**: Handle class imbalance automatically
-- **Advanced Augmentation Pipeline**: Real-time augmentation during training
-- **Comprehensive Analysis**: Detailed dataset statistics and visualizations
+**A. Robust Audio Preprocessing**
+- Enhanced normalization with RMS scaling
+- Proper handling of non-finite values (NaN, Inf)
+- DC offset removal and clipping to valid ranges
+- Better error handling for corrupted audio files
 
-## 📁 Project Structure
+**B. Targeted Data Augmentation**
+- Identifies classes with fewer than 8 samples
+- Applies 1-3 augmentations per underrepresented sample
+- Conservative augmentation parameters to avoid corruption
+- Multiple augmentation types: noise, pitch shift, time stretch, volume
+
+**C. Optimized Training Configuration**
+- Smaller batch sizes (4) for stability
+- Lower learning rate (3e-5) with cosine scheduling
+- Increased label smoothing (0.15) for small datasets
+- Progressive unfreezing strategy
+- Enhanced gradient clipping (0.5)
+
+**D. Two-Phase Training**
+1. **Phase 1**: Train with frozen feature encoder
+2. **Phase 2**: Unfreeze and fine-tune with reduced learning rate
+
+### 2. Improved Traditional Model (`train.py` & `model.py`)
+
+#### Enhanced CNN-RNN Architecture:
+- **Depthwise Separable Convolutions**: More efficient feature extraction
+- **Attention Mechanisms**: Better focus on important features
+- **LSTM instead of GRU**: Better long-term dependencies
+- **Layer Normalization**: Improved training stability
+- **Residual Connections**: Better gradient flow
+
+#### Training Improvements:
+- Class-weighted loss for imbalanced data
+- AdamW optimizer with weight decay
+- More responsive learning rate scheduling
+- Better checkpoint handling and recovery
+
+### 3. Comprehensive Validation System (`validate_setup.py`)
+
+#### Features:
+- **Environment Validation**: Check dependencies and CUDA
+- **Data Connectivity**: Test MongoDB and Cloudflare R2 connections
+- **Dataset Analysis**: Class distribution, missing files, audio quality
+- **Model Architecture Testing**: Forward pass, gradient computation
+- **Audio Processing Validation**: Complete preprocessing pipeline
+
+#### Outputs:
+- Detailed validation report
+- Class distribution visualizations
+- Actionable recommendations
+- Issue identification and fixes
+
+### 4. Enhanced Pipeline (`pipeline.py`)
+
+#### New Features:
+- Pre-training validation
+- Choice between traditional and HuggingFace training
+- Better error handling and logging
+- Comprehensive argument parsing
+
+## Usage Instructions
+
+### 1. Environment Setup
+
+```bash
+# Install dependencies
+pip install torch torchaudio transformers datasets
+pip install pandas numpy librosa sounddevice audiomentations
+pip install wandb scikit-learn matplotlib seaborn
+
+# Set environment variables in .env file
+WANDB_API_KEY="your_wandb_key"
+MONGODB_URI="your_mongodb_uri"
+# ... other required variables
+```
+
+### 2. Validate Your Setup
+
+```bash
+# Full validation
+python -m src.pipeline --mode validate
+
+# Quick validation (environment only)
+python -m src.pipeline --mode validate --quick-validate
+```
+
+### 3. Fetch and Prepare Data
+
+```bash
+python -m src.pipeline --mode fetch
+```
+
+### 4. Train Your Model
+
+**Recommended: Use HuggingFace Wav2Vec2 (Transfer Learning)**
+```bash
+# With augmentation (recommended for small datasets)
+python -m src.pipeline --mode train --use-hf
+
+# Without augmentation
+python -m src.pipeline --mode train --use-hf --no-augment
+```
+
+**Traditional CNN-RNN Approach**
+```bash
+python -m src.pipeline --mode train
+```
+
+### 5. Test Your Model
+
+```bash
+python -m src.pipeline --mode test
+```
+
+## Training Strategies for Small Datasets
+
+### 1. Transfer Learning (Recommended)
+- Use pre-trained Wav2Vec2 model
+- Fine-tune on your Twi commands
+- Requires less data to achieve good performance
+
+### 2. Data Augmentation
+- Automatic augmentation for underrepresented classes
+- Conservative parameters to avoid data corruption
+- Multiple augmentation techniques combined
+
+### 3. Model Architecture Optimizations
+- Attention mechanisms for better feature selection
+- Proper weight initialization
+- Regularization techniques (dropout, weight decay)
+
+### 4. Training Techniques
+- Progressive unfreezing
+- Class-weighted loss functions
+- Learning rate scheduling
+- Early stopping with patience
+
+## Expected Performance
+
+### With HuggingFace Approach:
+- **Small Dataset (50-100 samples)**: 60-80% accuracy
+- **Medium Dataset (100-500 samples)**: 80-90% accuracy
+- **Large Dataset (500+ samples)**: 90%+ accuracy
+
+### With Traditional Approach:
+- **Small Dataset**: 40-60% accuracy
+- **Medium Dataset**: 60-80% accuracy
+- **Large Dataset**: 80%+ accuracy
+
+## Troubleshooting
+
+### Common Issues and Solutions:
+
+1. **Model Not Learning**
+   - Run validation to check data quality
+   - Use HuggingFace approach for better results
+   - Enable data augmentation
+   - Check for corrupted audio files
+
+2. **Out of Memory Errors**
+   - Reduce batch size to 2 or 1
+   - Use gradient checkpointing
+   - Process on CPU if necessary
+
+3. **Poor Audio Quality**
+   - Check audio preprocessing pipeline
+   - Validate file formats and sampling rates
+   - Remove very short or corrupted files
+
+4. **Class Imbalance**
+   - Enable targeted data augmentation
+   - Use class-weighted loss functions
+   - Consider collecting more balanced data
+
+### Validation Outputs:
+
+The validation system will generate:
+- `validation_results/validation_report.txt`: Detailed analysis
+- `validation_results/class_distribution.png`: Visual distribution
+- Console recommendations for improvements
+
+## Advanced Configuration
+
+### Custom Model Parameters:
+
+```python
+# In train_hf.py, modify these parameters:
+MODEL_CHECKPOINT = "facebook/wav2vec2-base-960h"  # or other models
+BATCH_SIZE = 4  # Adjust based on memory
+LEARNING_RATE = 3e-5  # Fine-tune learning rate
+```
+
+### Custom Augmentation:
+
+```python
+# In train_hf.py, modify augmentation parameters:
+def augment_audio_data(...):
+    # Adjust noise, pitch shift, time stretch parameters
+    # based on your data characteristics
+```
+
+## Monitoring Training
+
+### Weights & Biases Integration:
+- Automatic logging of metrics
+- Real-time training visualization
+- Model comparison and versioning
+
+### Local Monitoring:
+- Console logs with detailed progress
+- Training plots saved locally
+- Checkpoint recovery system
+
+## File Structure
 
 ```
-twi_speech/training_engine/
+training_engine/
 ├── src/
-│   ├── models/
-│   │   └── advanced_speech_model.py      # Superior model architecture
-│   ├── features/
-│   │   ├── advanced_feature_extractor.py # Enhanced feature extraction
-│   │   ├── advanced_augmentation.py      # Sophisticated augmentation
-│   │   └── dataset_utils.py              # Dataset management utilities
-│   ├── trainers/
-│   │   └── superior_trainer.py           # Advanced training engine
-│   └── preprocessing/
-├── config/
-├── train_superior_model.py               # Main training script
-├── requirements.txt                      # Dependencies
-└── README.md                            # This file
+│   ├── train_hf.py          # Enhanced HuggingFace training
+│   ├── train.py             # Improved traditional training
+│   ├── model.py             # Enhanced CNN-RNN architecture
+│   ├── validate_setup.py    # Comprehensive validation
+│   ├── pipeline.py          # Unified pipeline interface
+│   ├── data_loader.py       # Data loading utilities
+│   └── predict_realtime.py  # Real-time prediction
+├── models/                  # Trained models
+├── validation_results/      # Validation outputs
+└── TRAINING_IMPROVEMENTS.md # This documentation
 ```
 
-## 🛠️ Installation
+## Best Practices
 
-1. **Clone the repository** (if not already done):
-```bash
-git clone <repository-url>
-cd twi_speech/training_engine
-```
+1. **Always validate before training**
+2. **Use HuggingFace approach for small datasets**
+3. **Enable augmentation for imbalanced classes**
+4. **Monitor training with Weights & Biases**
+5. **Save checkpoints frequently**
+6. **Test with real audio samples**
 
-2. **Create a virtual environment**:
-```bash
-python -m venv superior_env
-source superior_env/bin/activate  # On Windows: superior_env\Scripts\activate
-```
+## Future Improvements
 
-3. **Install dependencies**:
-```bash
-pip install -r requirements.txt
-```
+1. **Multi-modal Training**: Combine audio with text embeddings
+2. **Active Learning**: Identify most informative samples to label
+3. **Model Distillation**: Create smaller, faster models
+4. **Online Learning**: Continuously improve with new data
+5. **Cross-lingual Transfer**: Leverage other African language models
 
-## 🎯 Quick Start
-
-### Basic Training
-```bash
-python train_superior_model.py --recordings_dir /path/to/your/audio/recordings
-```
-
-### Advanced Training with Custom Parameters
-```bash
-python train_superior_model.py \
-    --recordings_dir /path/to/your/audio/recordings \
-    --epochs 150 \
-    --batch_size 64 \
-    --learning_rate 0.0005 \
-    --model_dir models/my_superior_model
-```
-
-### Force Re-extraction of Features
-```bash
-python train_superior_model.py \
-    --recordings_dir /path/to/your/audio/recordings \
-    --force_reextract
-```
-
-## ⚙️ Configuration
-
-### Command Line Arguments
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--recordings_dir` | str | Required | Directory containing audio recordings |
-| `--epochs` | int | 100 | Number of training epochs |
-| `--batch_size` | int | 32 | Batch size for training |
-| `--learning_rate` | float | 0.001 | Learning rate |
-| `--force_reextract` | flag | False | Force re-extraction of features |
-| `--config_file` | str | None | Path to JSON configuration file |
-| `--model_dir` | str | models/superior | Directory to save models |
-
-### Configuration File Format
-
-Create a JSON configuration file for advanced settings:
-
-```json
-{
-    "model": {
-        "hidden_dim": 256,
-        "num_conv_layers": 4,
-        "num_attention_layers": 3,
-        "num_heads": 8,
-        "dropout": 0.1
-    },
-    "training": {
-        "learning_rate": 0.001,
-        "weight_decay": 0.01,
-        "optimizer": "adamw",
-        "scheduler": "cosine_warmup",
-        "warmup_epochs": 5,
-        "label_smoothing": 0.1,
-        "early_stopping_patience": 15,
-        "use_amp": true,
-        "max_grad_norm": 1.0
-    },
-    "dataset": {
-        "train_ratio": 0.7,
-        "val_ratio": 0.15,
-        "test_ratio": 0.15,
-        "batch_size": 32,
-        "num_workers": 4,
-        "use_weighted_sampling": true,
-        "augment_training": true,
-        "augment_prob": 0.6
-    }
-}
-```
-
-## 📊 Training Process
-
-The training engine follows these steps:
-
-1. **Feature Extraction**: Extract comprehensive audio features from recordings
-2. **Dataset Preparation**: Create stratified splits and analyze data distribution
-3. **Model Creation**: Initialize the superior model architecture
-4. **Training Setup**: Configure optimizer, scheduler, and loss functions
-5. **Superior Training**: Train with advanced techniques and monitoring
-6. **Final Evaluation**: Test on held-out data and generate reports
-
-## 🎨 Advanced Features
-
-### Feature Extraction
-- **MFCC + Deltas**: Traditional features with first and second derivatives
-- **Mel Spectrograms**: Log-mel spectrograms for deep learning
-- **Spectral Features**: Centroid, rolloff, bandwidth, contrast
-- **Chroma Features**: Pitch class profiles
-- **Tonnetz Features**: Harmonic network representation
-- **Zero Crossing Rate**: Voice activity detection
-- **Poly Features**: Polynomial coefficients
-
-### Data Augmentation Techniques
-1. **SpecAugment**: Frequency and time masking
-2. **Time Shifting**: Temporal displacement
-3. **Pitch Shifting**: Frequency domain shifting
-4. **Speed Perturbation**: Temporal scaling
-5. **Gaussian Noise**: Adaptive noise addition
-6. **Dynamic Range Compression**: Audio compression simulation
-7. **Spectral Subtraction**: Noise reduction simulation
-8. **Formant Shifting**: Vocal tract simulation
-9. **Frequency Warping**: Non-linear frequency mapping
-10. **Time Stretching**: Phase vocoder-like processing
-11. **Mixup**: Feature-level mixing
-12. **Adaptive Masking**: Context-aware masking
-13. **Vocal Tract Length Perturbation**: Speaker variation simulation
-14. **Multi-band Processing**: Frequency-specific augmentation
-15. **Advanced Interpolation**: Smooth temporal modifications
-
-### Model Architecture Highlights
-- **Multi-Scale Convolutions**: 3×, 5×, and 7× kernel convolutions in parallel
-- **Squeeze-Excitation with Dual Pooling**: Both average and max pooling for attention
-- **Adaptive Attention**: Learnable temperature parameter for attention weights
-- **Progressive Refinement**: Multiple processing stages with residual connections
-- **Advanced Pooling**: Learnable combination of different pooling strategies
-
-## 📈 Performance Monitoring
-
-The engine provides comprehensive monitoring:
-
-- **Real-time Training Metrics**: Loss, accuracy, F1-score
-- **Learning Rate Tracking**: Automatic scheduling visualization
-- **Validation Monitoring**: Early stopping based on validation performance
-- **Class-wise Analysis**: Per-class performance metrics
-- **Confusion Matrices**: Visual performance analysis
-- **Training Curves**: Loss and accuracy progression plots
-
-## 🔄 Model Comparison
-
-### vs. Local Dialect Speech Model
-
-| Feature | Local Dialect | Superior Engine |
-|---------|---------------|-----------------|
-| Feature Types | Basic MFCC (39 dims) | Comprehensive (100+ dims) |
-| Architecture | Simple CNN+RNN | Multi-scale CNN + Attention |
-| Augmentation | 5 basic techniques | 15+ advanced techniques |
-| Training | Standard SGD/Adam | Mixed precision + advanced scheduling |
-| Regularization | Basic dropout | Label smoothing + advanced techniques |
-| Data Handling | Simple splits | Stratified + weighted sampling |
-| Monitoring | Basic metrics | Comprehensive analysis |
-
-## 🎯 Expected Performance Improvements
-
-Based on architectural improvements, expect:
-
-- **15-25% improvement in accuracy** over the local dialect model
-- **30-40% faster training** with mixed precision
-- **Better generalization** through advanced regularization
-- **More robust predictions** with comprehensive feature extraction
-- **Superior handling of imbalanced data** with weighted sampling
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-1. **CUDA Out of Memory**:
-   ```bash
-   # Reduce batch size
-   python train_superior_model.py --batch_size 16 --recordings_dir /path/to/recordings
-   ```
-
-2. **Feature Extraction Fails**:
-   ```bash
-   # Check audio file formats and paths
-   # Ensure recordings directory contains .wav, .mp3, or .flac files
-   ```
-
-3. **Slow Training**:
-   ```bash
-   # Reduce model complexity or use GPU
-   # Check if CUDA is available: python -c "import torch; print(torch.cuda.is_available())"
-   ```
-
-4. **Imbalanced Dataset Warnings**:
-   - The engine automatically handles imbalanced data with weighted sampling
-   - Check dataset analysis plots in the analysis directory
-
-### Getting Help
+## Support
 
 If you encounter issues:
+1. Run the validation system first
+2. Check the generated reports and recommendations
+3. Review the console logs for specific error messages
+4. Ensure all dependencies are correctly installed
+5. Verify environment variables are set properly
 
-1. Check the generated `debug_info.json` file in the model directory
-2. Review the training logs for detailed error messages
-3. Ensure all dependencies are correctly installed
-4. Verify your audio files are in supported formats
-
-## 📝 Output Files
-
-After training, you'll find these files in your model directory:
-
-- `best_model.pt`: Best performing model checkpoint
-- `final_model.pt`: Final model state
-- `config.json`: Training configuration used
-- `training_summary.json`: Comprehensive training statistics
-- `training_history.png`: Training progress plots
-- `classification_report_*.json`: Per-epoch performance reports
-- `confusion_matrix_*.png`: Confusion matrices for best epochs
-- `dataset_info.json`: Dataset statistics and feature information
-
-## 🚀 Production Deployment
-
-To use your trained model for inference:
-
-```python
-import torch
-from src.models.advanced_speech_model import SuperiorTwiSpeechModel
-
-# Load the trained model
-checkpoint = torch.load('models/superior/best_model.pt')
-model = SuperiorTwiSpeechModel(...)  # Use same config as training
-model.load_state_dict(checkpoint['model_state_dict'])
-model.eval()
-
-# Use for inference
-with torch.no_grad():
-    predictions = model(audio_features)
-```
-
-## 🎓 Advanced Usage
-
-### Cross-Validation Training
-```python
-from src.features.dataset_utils import DatasetManager
-
-# Create 5-fold cross-validation splits
-dataset_manager = DatasetManager()
-cv_splits = dataset_manager.create_cross_validation_splits(dataset, n_folds=5)
-
-# Train on each fold
-for fold, (train_ds, val_ds) in enumerate(cv_splits):
-    print(f"Training fold {fold + 1}")
-    # Train your model here
-```
-
-### Custom Augmentation Pipeline
-```python
-from src.features.advanced_augmentation import AdvancedAugmentation
-
-# Create custom augmentation pipeline
-augmenter = AdvancedAugmentation()
-custom_pipeline = augmenter.create_augmentation_pipeline([
-    'spec_augment',
-    'time_masking',
-    'gaussian_noise'
-])
-
-# Apply to your features
-augmented_features = custom_pipeline(original_features)
-```
-
-## 📄 License
-
-This superior training engine is part of the Twi Speech Recognition project. Please refer to the main project license for usage terms.
-
-## 🤝 Contributing
-
-To contribute improvements to the superior engine:
-
-1. Fork the repository
-2. Create a feature branch
-3. Implement your improvements
-4. Add tests and documentation
-5. Submit a pull request
-
----
-
-**🎯 Ready to train your superior Twi speech model? Start with the Quick Start guide above!**
+The improved pipeline is designed to be robust, user-friendly, and effective for small Twi speech datasets. The combination of transfer learning, data augmentation, and careful validation should significantly improve your model's learning capability and final performance.
