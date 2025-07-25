@@ -17,11 +17,11 @@ logging.basicConfig(
 
 # Import our modules
 try:
-    from .data_loader import load_and_prepare_data, get_mongo_client, get_s3_client
+    from .data_loader import load_and_prepare_data, get_mongo_client, get_s3_client, load_backend_env, BACKEND_ENV_PATH
     from .model import ECommerceCommandModel
     from .train_hf import load_and_prepare_dataset
 except ImportError:
-    from data_loader import load_and_prepare_data, get_mongo_client, get_s3_client
+    from data_loader import load_and_prepare_data, get_mongo_client, get_s3_client, load_backend_env, BACKEND_ENV_PATH
     from model import ECommerceCommandModel
     from train_hf import load_and_prepare_dataset
 
@@ -38,6 +38,18 @@ class TwiSpeechValidator:
         self.results = {}
         self.issues = []
         self.recommendations = []
+        # Load environment variables at initialization
+        self._load_environment()
+
+    def _load_environment(self):
+        """Load environment variables from .env file."""
+        try:
+            # Try to load from the backend .env path
+            load_backend_env(BACKEND_ENV_PATH)
+            logging.info("✓ Environment variables loaded from .env file")
+        except Exception as e:
+            logging.warning(f"⚠ Could not load .env file: {e}")
+            logging.info("Using system environment variables")
 
     def validate_environment(self):
         """Check if all required packages and environment variables are available."""
@@ -167,8 +179,23 @@ class TwiSpeechValidator:
 
         for idx, row in df.head(min(50, len(df))).iterrows():  # Check first 50 files
             audio_path = row['local_path']
+
+            # Handle relative paths by making them absolute
+            if not os.path.isabs(audio_path):
+                # If path starts with 'training_engine/', remove the prefix and make it relative to project root
+                if audio_path.startswith('training_engine/'):
+                    # Get the project root (parent of parent of src directory)
+                    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+                    # Remove 'training_engine/' prefix and join with project root
+                    relative_path = audio_path[len('training_engine/'):]
+                    audio_path = os.path.join(project_root, 'training_engine', relative_path)
+                else:
+                    # Otherwise, assume it's relative to current working directory
+                    audio_path = os.path.abspath(audio_path)
+
             if not os.path.exists(audio_path):
                 missing_files += 1
+                logging.warning(f"Missing audio file: {audio_path}")
                 continue
 
             try:
@@ -315,9 +342,22 @@ class TwiSpeechValidator:
             # Test with first available audio file
             test_audio_path = None
             for _, row in df.head(10).iterrows():
-                if os.path.exists(row['local_path']):
-                    test_audio_path = row['local_path']
-                    break
+                    audio_path = row['local_path']
+
+                    # Handle relative paths by making them absolute
+                    if not os.path.isabs(audio_path):
+                        if audio_path.startswith('training_engine/'):
+                            # Get the project root (parent of parent of src directory)
+                            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+                            # Remove 'training_engine/' prefix and join with project root
+                            relative_path = audio_path[len('training_engine/'):]
+                            audio_path = os.path.join(project_root, 'training_engine', relative_path)
+                        else:
+                            audio_path = os.path.abspath(audio_path)
+
+                    if os.path.exists(audio_path):
+                        test_audio_path = audio_path
+                        break
 
             if test_audio_path is None:
                 logging.warning("⚠ No valid audio files found for processing test")
@@ -449,9 +489,19 @@ class TwiSpeechValidator:
 
         success = True
 
+        # For training purposes, we can skip connectivity validation if metadata exists
+        skip_connectivity = metadata_csv_path and os.path.exists(metadata_csv_path)
+
         # Run all validations
         success &= self.validate_environment()
-        success &= self.validate_data_connectivity()
+
+        # Only check connectivity if we don't have local data
+        if not skip_connectivity:
+            success &= self.validate_data_connectivity()
+        else:
+            logging.info("=== Skipping Data Connectivity (using local CSV) ===")
+            logging.info("✓ Using local CSV data, skipping MongoDB/R2 validation")
+
         success &= self.validate_dataset(metadata_csv_path)
         success &= self.validate_model_architecture()
         success &= self.validate_audio_processing(metadata_csv_path)
@@ -464,17 +514,26 @@ class TwiSpeechValidator:
 
         # Final summary
         logging.info("=" * 60)
-        if success and len(self.issues) == 0:
+
+        # Filter out connectivity issues if we're using local CSV
+        critical_issues = []
+        if skip_connectivity:
+            critical_issues = [issue for issue in self.issues
+                             if not ("MongoDB" in issue or "Cloudflare" in issue)]
+        else:
+            critical_issues = self.issues
+
+        if success and len(critical_issues) == 0:
             logging.info("🎉 VALIDATION PASSED - Ready for training!")
-        elif len(self.issues) == 0:
+        elif len(critical_issues) == 0:
             logging.info("⚠️  VALIDATION COMPLETED with warnings - Should work but may need attention")
         else:
             logging.info("❌ VALIDATION FAILED - Please fix issues before training")
-            logging.info("Issues found:")
-            for issue in self.issues:
+            logging.info("Critical issues found:")
+            for issue in critical_issues:
                 logging.info(f"  - {issue}")
 
-        return success and len(self.issues) == 0
+        return success and len(critical_issues) == 0
 
 
 def main():

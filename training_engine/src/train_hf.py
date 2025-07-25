@@ -26,6 +26,15 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+# Load environment variables
+from dotenv import load_dotenv
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+if os.path.exists(env_path):
+    load_dotenv(dotenv_path=env_path)
+    logging.info(f"Loaded environment variables from {env_path}")
+else:
+    logging.warning("No .env file found, using system environment variables")
+
 # --- Hugging Face Model and Training Configuration ---
 MODEL_CHECKPOINT = "facebook/wav2vec2-base-960h"
 MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'models', 'e_commerce_model_hf_optimized')
@@ -140,6 +149,29 @@ def load_and_prepare_dataset(metadata_csv_path: str, augment=False):
 
     if 'local_path' not in df.columns or 'prompt_text' not in df.columns:
         raise ValueError("Metadata CSV must contain 'local_path' and 'prompt_text' columns.")
+
+    # Fix relative paths in the dataframe
+    def fix_path(path):
+        if not os.path.isabs(path) and path.startswith('training_engine/'):
+            # Get the project root (parent of parent of src directory)
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            # Remove 'training_engine/' prefix and join with project root
+            relative_path = path[len('training_engine/'):]
+            return os.path.join(project_root, 'training_engine', relative_path)
+        return path
+
+    df['local_path'] = df['local_path'].apply(fix_path)
+
+    # Verify files exist
+    missing_files = []
+    for idx, row in df.iterrows():
+        if not os.path.exists(row['local_path']):
+            missing_files.append(row['local_path'])
+
+    if missing_files:
+        logging.warning(f"Found {len(missing_files)} missing files. Removing from dataset.")
+        df = df[df['local_path'].apply(os.path.exists)]
+        logging.info(f"Dataset reduced to {len(df)} samples after removing missing files.")
 
     # Create label mappings
     unique_labels = sorted(df['prompt_text'].unique())
@@ -575,7 +607,7 @@ if __name__ == '__main__':
 
     # Setup wandb authentication
     api_key = os.environ.get("WANDB_API_KEY")
-    if api_key:
+    if api_key and api_key.strip():  # Check if key exists and is not empty
         try:
             wandb.login(key=api_key)
             logging.info("Successfully logged into Weights & Biases")
@@ -583,7 +615,7 @@ if __name__ == '__main__':
             logging.warning(f"Wandb login failed: {e}. Disabling wandb logging.")
             os.environ["WANDB_DISABLED"] = "true"
     else:
-        logging.warning("WANDB_API_KEY not found. Wandb logging will be disabled.")
+        logging.warning("WANDB_API_KEY not found or empty. Wandb logging will be disabled.")
         os.environ["WANDB_DISABLED"] = "true"
 
     # Validate metadata file exists

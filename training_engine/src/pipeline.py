@@ -3,7 +3,7 @@ import logging
 import os
 import sys
 
-from .data_loader import load_and_prepare_data
+from .data_loader import load_and_prepare_data, load_backend_env, BACKEND_ENV_PATH
 from .train import run_training, run_testing
 from .train_hf import run_hf_training
 from .validate_setup import TwiSpeechValidator
@@ -15,6 +15,15 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 def fetch():
     logging.info("=== [FETCH MODE] ===")
+
+    # Load environment variables first
+    try:
+        load_backend_env(BACKEND_ENV_PATH)
+        logging.info("✓ Environment variables loaded")
+    except Exception as e:
+        logging.error(f"Failed to load environment variables: {e}")
+        return
+
     df = load_and_prepare_data()
     if df is not None and not df.empty:
         logging.info(f"Fetched and saved {len(df)} audio files and metadata.")
@@ -38,14 +47,33 @@ def train(use_huggingface=False, augment=True):
         logging.error(f"Metadata CSV not found. Run fetch mode first. {METADATA_CSV}")
         return
 
-    # Run pre-training validation
+    # Load environment variables for training
+    try:
+        load_backend_env(BACKEND_ENV_PATH)
+        logging.info("✓ Environment variables loaded for training")
+    except Exception as e:
+        logging.warning(f"Could not load .env file: {e}")
+        logging.info("Continuing with system environment variables")
+
+    # Run pre-training validation with local data focus
     logging.info("Running pre-training validation...")
     validator = TwiSpeechValidator()
-    validation_passed = validator.run_full_validation(METADATA_CSV)
+
+    # Since we have local CSV, focus on essential validations
+    validation_passed = True
+    validation_passed &= validator.validate_environment()
+    validation_passed &= validator.validate_dataset(METADATA_CSV)
+    validation_passed &= validator.validate_model_architecture()
+    validation_passed &= validator.validate_audio_processing(METADATA_CSV)
+
+    validator.generate_recommendations()
+    validator.save_report()
 
     if not validation_passed:
-        logging.error("Validation failed. Please fix issues before training.")
+        logging.error("Critical validation failed. Please fix issues before training.")
         return
+    else:
+        logging.info("✓ Essential validations passed. Proceeding with training...")
 
     if use_huggingface:
         # Use improved HuggingFace training
@@ -61,11 +89,25 @@ def test():
         return
     run_testing(metadata_csv=METADATA_CSV)
 
-def validate():
+def validate(quick=False):
     """Run comprehensive validation of the training pipeline."""
     logging.info("=== [VALIDATE MODE] ===")
+
+    # Load environment variables first
+    try:
+        load_backend_env(BACKEND_ENV_PATH)
+        logging.info("✓ Environment variables loaded for validation")
+    except Exception as e:
+        logging.warning(f"Could not load .env file: {e}")
+        logging.info("Using system environment variables")
+
     validator = TwiSpeechValidator()
-    success = validator.run_full_validation(METADATA_CSV)
+
+    if quick:
+        success = validator.validate_environment()
+        success &= validator.validate_model_architecture()
+    else:
+        success = validator.run_full_validation(METADATA_CSV)
 
     if success:
         logging.info("✅ All validations passed! Ready for training.")
@@ -94,13 +136,7 @@ def main():
         elif args.mode == 'test':
             test()
         elif args.mode == 'validate':
-            if args.quick_validate:
-                validator = TwiSpeechValidator()
-                success = validator.validate_environment()
-                success &= validator.validate_model_architecture()
-                sys.exit(0 if success else 1)
-            else:
-                sys.exit(validate())
+            sys.exit(validate(quick=args.quick_validate))
 
         logging.info("Pipeline execution completed successfully!")
 
